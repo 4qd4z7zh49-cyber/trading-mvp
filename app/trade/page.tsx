@@ -37,8 +37,6 @@ function calcStats(orders: { side: 'BUY' | 'SELL'; total: number; market: string
   const sell = orders.filter((o) => o.side === 'SELL').reduce((s, o) => s + o.total, 0);
   const pnl = sell - buy;
 
-  // Simple win-rate (MVP heuristic):
-  // For each SELL, compare with last BUY price of same market (if exists).
   const lastBuyPrice: Record<string, number> = {};
   let wins = 0,
     losses = 0;
@@ -93,12 +91,9 @@ export default function TradePage() {
 
       if (o) setOrders(JSON.parse(o));
       else localStorage.setItem(LS_ORDERS, JSON.stringify([]));
-    } catch {
-      // ignore (private mode etc.)
-    }
+    } catch {}
   }, []);
 
-  // Save helpers
   function saveBalance(next: number) {
     setBalance(next);
     try {
@@ -180,15 +175,9 @@ export default function TradePage() {
     if (!Number.isFinite(p) || p <= 0) return alert('Fill price must be a positive number.');
 
     const total = q * p;
-
-    // Basic balance effect (MVP)
-    // BUY: balance decreases by total
-    // SELL: balance increases by total
     const nextBalance = side === 'BUY' ? balance - total : balance + total;
 
-    if (side === 'BUY' && nextBalance < 0) {
-      return alert('Insufficient balance for this BUY (paper).');
-    }
+    if (side === 'BUY' && nextBalance < 0) return alert('Insufficient balance for this BUY (paper).');
 
     const order: PaperOrder = {
       id: genId(),
@@ -212,13 +201,39 @@ export default function TradePage() {
     saveOrders([]);
   }
 
+  // ✅ Mobile responsive CSS (desktop 2-col, phone 1-col)
+  const responsiveCss = `
+    .tv-grid { display: grid; grid-template-columns: 2fr 1fr; gap: 16px; }
+    .tv-right { display: grid; gap: 16px; }
+    .tv-chart { height: 520px; }
+    .tv-screener { height: 260px; }
+    .tv-gainers { height: 360px; }
+    .tv-tape { height: 46px; }
+
+    @media (max-width: 900px) {
+      .tv-grid { grid-template-columns: 1fr; }
+      .tv-chart { height: 420px; }
+      .tv-screener { height: 360px; }
+      .tv-gainers { height: 420px; }
+      .tv-tape { height: 56px; }
+    }
+
+    @media (max-width: 480px) {
+      .tv-chart { height: 360px; }
+      .tv-screener { height: 320px; }
+      .tv-gainers { height: 380px; }
+    }
+  `;
+
   return (
     <div style={{ background: '#0b0e11', minHeight: '100vh', padding: '16px', color: 'white' }}>
+      <style>{responsiveCss}</style>
+
       <h1 style={{ fontSize: 24, marginBottom: 12 }}>Trade</h1>
 
       {/* Quotes */}
       <div style={{ marginBottom: 16 }}>
-        <iframe src={tickerTapeSrc} style={{ width: '100%', height: 46, border: 'none' }} />
+        <iframe src={tickerTapeSrc} className="tv-tape" style={{ width: '100%', border: 'none' }} />
       </div>
 
       {/* Tabs */}
@@ -242,17 +257,22 @@ export default function TradePage() {
       </div>
 
       {/* Main Grid */}
-      <div style={{ display: 'grid', gridTemplateColumns: '2fr 1fr', gap: 16 }}>
+      <div className="tv-grid">
         {/* Chart */}
         <div style={{ background: '#111', padding: 8, borderRadius: 10, border: '1px solid #222' }}>
           <div style={{ color: '#94a3b8', fontSize: 12, marginBottom: 6 }}>
             Chart: {activeMarket.title} ({activeMarket.chartSymbol})
           </div>
-          <iframe key={activeMarket.chartSymbol} src={chartSrc} style={{ width: '100%', height: 520, border: 'none' }} />
+          <iframe
+            key={activeMarket.chartSymbol}
+            src={chartSrc}
+            className="tv-chart"
+            style={{ width: '100%', border: 'none' }}
+          />
         </div>
 
         {/* Right column */}
-        <div style={{ display: 'grid', gap: 16 }}>
+        <div className="tv-right">
           {/* Paper Trade Panel */}
           <div style={{ background: '#111', padding: 14, borderRadius: 10, border: '1px solid #222' }}>
             <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', marginBottom: 10 }}>
@@ -330,7 +350,6 @@ export default function TradePage() {
               }}
             />
 
-            {/* MVP fill price */}
             <label style={{ display: 'block', color: '#94a3b8', fontSize: 12, marginBottom: 6 }}>
               Fill Price (MVP manual)
             </label>
@@ -390,7 +409,7 @@ export default function TradePage() {
           {/* Crypto list */}
           <div style={{ background: '#111', padding: 8, borderRadius: 10, border: '1px solid #222' }}>
             <div style={{ color: '#94a3b8', fontSize: 12, marginBottom: 6 }}>Crypto Market (Top coins)</div>
-            <iframe src={cryptoTopSrc} style={{ width: '100%', height: 260, border: 'none' }} />
+            <iframe src={cryptoTopSrc} className="tv-screener" style={{ width: '100%', border: 'none' }} />
           </div>
 
           {/* Summary */}
@@ -454,9 +473,7 @@ export default function TradePage() {
                     </div>
                   </div>
                 ))}
-                {orders.length > 6 && (
-                  <div style={{ color: '#94a3b8', fontSize: 12 }}>Showing latest 6 orders.</div>
-                )}
+                {orders.length > 6 && <div style={{ color: '#94a3b8', fontSize: 12 }}>Showing latest 6 orders.</div>}
               </div>
             )}
           </div>
@@ -466,7 +483,6 @@ export default function TradePage() {
             const s = calcStats(orders);
             const yourPnl = s.pnl;
 
-            // demo players
             const demo = [
               { name: 'Aung', pnl: 820 },
               { name: 'May', pnl: 410 },
@@ -477,7 +493,9 @@ export default function TradePage() {
 
             const list = [...demo, { name: 'You', pnl: yourPnl }].sort((a, b) => b.pnl - a.pnl).slice(0, 6);
             const yourRank =
-              [...demo, { name: 'You', pnl: yourPnl }].sort((a, b) => b.pnl - a.pnl).findIndex((x) => x.name === 'You') + 1;
+              [...demo, { name: 'You', pnl: yourPnl }]
+                .sort((a, b) => b.pnl - a.pnl)
+                .findIndex((x) => x.name === 'You') + 1;
 
             return (
               <div style={{ background: '#111', padding: 12, borderRadius: 10, border: '1px solid #222' }}>
@@ -517,7 +535,7 @@ export default function TradePage() {
       {/* US Top Gainers */}
       <div style={{ marginTop: 16, background: '#111', padding: 8, borderRadius: 10, border: '1px solid #222' }}>
         <div style={{ color: '#94a3b8', fontSize: 12, marginBottom: 6 }}>US Stocks — Top Gainers</div>
-        <iframe src={usGainersSrc} style={{ width: '100%', height: 360, border: 'none' }} />
+        <iframe src={usGainersSrc} className="tv-gainers" style={{ width: '100%', border: 'none' }} />
       </div>
     </div>
   );

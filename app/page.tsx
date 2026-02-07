@@ -1,31 +1,38 @@
 import Link from 'next/link';
 
 export default function HomePage() {
+  const responsiveCss = `
+    .lp-wrap { max-width: 980px; margin: 0 auto; }
+    .lp-hero { background: #111; border: 1px solid #222; border-radius: 16px; padding: 24px; }
+    .lp-actions { display: flex; gap: 10px; margin-top: 18px; flex-wrap: wrap; }
+    .lp-features { display: grid; grid-template-columns: repeat(3, 1fr); gap: 12px; margin-top: 14px; }
+
+    @media (max-width: 900px) {
+      .lp-features { grid-template-columns: 1fr; }
+    }
+
+    @media (max-width: 520px) {
+      .lp-actions { flex-direction: column; }
+      .lp-actions a { width: 100%; text-align: center; }
+    }
+  `;
+
   return (
     <div style={{ background: '#0b0e11', minHeight: '100vh', padding: '28px', color: 'white' }}>
-      <div style={{ maxWidth: 980, margin: '0 auto' }}>
-        <div
-          style={{
-            background: '#111',
-            border: '1px solid #222',
-            borderRadius: 16,
-            padding: 24,
-          }}
-        >
-          <div style={{ color: '#94a3b8', fontSize: 12, marginBottom: 10 }}>
-            Trading MVP · Demo Platform
-          </div>
+      <style>{responsiveCss}</style>
 
-          <h1 style={{ fontSize: 34, margin: 0, lineHeight: 1.15 }}>
-            Practice Trading with Live Market Charts
-          </h1>
+      <div className="lp-wrap">
+        <div className="lp-hero">
+          <div style={{ color: '#94a3b8', fontSize: 12, marginBottom: 10 }}>Trading MVP · Demo Platform</div>
+
+          <h1 style={{ fontSize: 34, margin: 0, lineHeight: 1.15 }}>Practice Trading with Live Market Charts</h1>
 
           <p style={{ color: '#cbd5e1', fontSize: 16, marginTop: 12, maxWidth: 760 }}>
-            A <b>paper trading</b> platform to explore Crypto, Gold, Silver, Coffee,
-            and top US stocks — <b>no real money required</b>.
+            A <b>paper trading</b> platform to explore Crypto, Gold, Silver, Coffee, and top US stocks —{' '}
+            <b>no real money required</b>.
           </p>
 
-          <div style={{ display: 'flex', gap: 10, marginTop: 18, flexWrap: 'wrap' }}>
+          <div className="lp-actions">
             <Link href="/trade" style={primaryBtn}>
               Go to Trade
             </Link>
@@ -48,14 +55,14 @@ export default function HomePage() {
               fontSize: 12,
             }}
           >
-            <b style={{ color: 'white' }}>Disclaimer:</b> This is a demo application.
-            All trades are simulated. No real funds involved.
+            <b style={{ color: 'white' }}>Disclaimer:</b> This is a demo application. All trades are simulated. No real
+            funds involved.
           </div>
         </div>
 
-        <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3, 1fr)', gap: 12, marginTop: 14 }}>
+        <div className="lp-features">
           <Feature title="Live Markets" desc="Real-time charts via TradingView widgets." />
-          <Feature title="Paper Trading" desc="Buy & sell simulation with balance and PnL." />
+          <Feature title="Paper Trading" desc="Buy & sell simulation with balance, orders, and PnL summary." />
           <Feature title="Mining Demo" desc="Simulated earnings added to paper balance." />
         </div>
 
@@ -71,7 +78,7 @@ function Feature({ title, desc }: { title: string; desc: string }) {
   return (
     <div style={{ background: '#111', border: '1px solid #222', borderRadius: 16, padding: 16 }}>
       <div style={{ fontWeight: 900, marginBottom: 6 }}>{title}</div>
-      <div style={{ color: '#94a3b8', fontSize: 12 }}>{desc}</div>
+      <div style={{ color: '#94a3b8', fontSize: 12, lineHeight: 1.5 }}>{desc}</div>
     </div>
   );
 }
