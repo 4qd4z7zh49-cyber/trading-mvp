@@ -1,6 +1,7 @@
 'use client';
 
 import React, { useEffect, useMemo, useState } from 'react';
+import { supabase } from '@/lib/supabaseClient';
 
 type MarketKey = 'BTC' | 'ETH' | 'GOLD' | 'SILVER' | 'COFFEE';
 type Side = 'BUY' | 'SELL';
@@ -8,14 +9,26 @@ type OrderType = 'MARKET' | 'LIMIT';
 
 type PaperOrder = {
   id: string;
-  time: string; // ISO
+  time: string; // ISO (local) OR created_at (db)
   market: string;
   symbol: string;
   side: Side;
   orderType: OrderType;
   qty: number;
-  price: number; // filled price (estimated for MVP)
-  total: number; // qty * price
+  price: number;
+  total: number;
+};
+
+type DbOrderRow = {
+  id: string;
+  created_at: string;
+  market: string;
+  symbol: string;
+  side: Side;
+  order_type: OrderType;
+  qty: number;
+  price: number;
+  total: number;
 };
 
 const LS_BALANCE = 'paper_balance_usd_v1';
@@ -75,17 +88,22 @@ export default function TradePage() {
   const [orderType, setOrderType] = useState<OrderType>('MARKET');
   const [qty, setQty] = useState<string>('1');
   const [limitPrice, setLimitPrice] = useState<string>('');
-  const [fillPrice, setFillPrice] = useState<string>('100'); // MVP: estimated fill price
+  const [fillPrice, setFillPrice] = useState<string>('100'); // MVP manual fill price
 
-  // Local state synced with localStorage
+  // State
   const [balance, setBalance] = useState<number>(10000);
   const [orders, setOrders] = useState<PaperOrder[]>([]);
+  const [userId, setUserId] = useState<string | null>(null);
 
-  // Load from localStorage once
+  // Mobile UI: switch between Chart and Transaction panels (desktop stays 2-col)
+  const [mobileTab, setMobileTab] = useState<'chart' | 'tx'>('chart');
+
+  // Load from localStorage once (fallback)
   useEffect(() => {
     try {
       const b = localStorage.getItem(LS_BALANCE);
       const o = localStorage.getItem(LS_ORDERS);
+
       if (b) setBalance(Number(b));
       else localStorage.setItem(LS_BALANCE, String(10000));
 
@@ -100,6 +118,7 @@ export default function TradePage() {
       localStorage.setItem(LS_BALANCE, String(next));
     } catch {}
   }
+
   function saveOrders(next: PaperOrder[]) {
     setOrders(next);
     try {
@@ -107,18 +126,71 @@ export default function TradePage() {
     } catch {}
   }
 
-  // Widgets
-  const tickerTapeSrc =
-    'https://s.tradingview.com/embed-widget/ticker-tape/?locale=en#' +
-    encodeURIComponent(
-      JSON.stringify({
-        symbols: markets.map((m) => ({ proName: m.tapeSymbol, title: m.title })),
-        colorTheme: 'dark',
-        isTransparent: false,
-        displayMode: 'adaptive',
-        showSymbolLogo: true,
-      })
-    );
+  function mapDbOrders(rows: DbOrderRow[]): PaperOrder[] {
+    return rows.map((r) => ({
+      id: r.id,
+      time: r.created_at,
+      market: r.market,
+      symbol: r.symbol,
+      side: r.side,
+      orderType: r.order_type,
+      qty: Number(r.qty),
+      price: Number(r.price),
+      total: Number(r.total),
+    }));
+  }
+
+  // Load user + balance + orders from Supabase (preferred)
+  useEffect(() => {
+    let mounted = true;
+
+    async function loadFromDb() {
+      try {
+        const {
+          data: { user },
+        } = await supabase.auth.getUser();
+
+        if (!mounted) return;
+        if (!user) return;
+
+        setUserId(user.id);
+
+        // balance
+        const { data: balRow, error: balErr } = await supabase
+          .from('balances')
+          .select('balance')
+          .eq('user_id', user.id)
+          .single();
+
+        if (!mounted) return;
+        if (!balErr && balRow) {
+          setBalance(Number((balRow as any).balance));
+        }
+
+        // orders
+        const { data: orderRows, error: ordErr } = await supabase
+          .from('orders')
+          .select('id,created_at,market,symbol,side,order_type,qty,price,total')
+          .eq('user_id', user.id)
+          .order('created_at', { ascending: false })
+          .limit(20);
+
+        if (!mounted) return;
+        if (!ordErr && orderRows) {
+          setOrders(mapDbOrders(orderRows as any));
+        }
+      } catch {
+        // keep fallback
+      }
+    }
+
+    loadFromDb();
+
+    return () => {
+      mounted = false;
+    };
+  }, []);
+
 
   const chartSrc =
     'https://s.tradingview.com/embed-widget/advanced-chart/?locale=en#' +
@@ -161,7 +233,7 @@ export default function TradePage() {
       })
     );
 
-  function submitOrder() {
+  async function submitOrder() {
     const q = Number(qty);
     if (!Number.isFinite(q) || q <= 0) return alert('Quantity must be a positive number.');
 
@@ -179,6 +251,41 @@ export default function TradePage() {
 
     if (side === 'BUY' && nextBalance < 0) return alert('Insufficient balance for this BUY (paper).');
 
+    // --- DB path (preferred) ---
+    if (userId) {
+      const { error: orderErr } = await supabase.from('orders').insert({
+        user_id: userId,
+        market: activeMarket.title,
+        symbol: activeMarket.chartSymbol,
+        side,
+        order_type: orderType,
+        qty: q,
+        price: p,
+        total,
+      });
+
+      if (!orderErr) {
+        const { error: balErr } = await supabase.from('balances').update({ balance: nextBalance }).eq('user_id', userId);
+
+        if (!balErr) {
+          setBalance(nextBalance);
+
+          const { data: orderRows } = await supabase
+            .from('orders')
+            .select('id,created_at,market,symbol,side,order_type,qty,price,total')
+            .eq('user_id', userId)
+            .order('created_at', { ascending: false })
+            .limit(20);
+
+          if (orderRows) setOrders(mapDbOrders(orderRows as any));
+          return;
+        }
+      }
+
+      console.warn('DB order/balance update failed; using local fallback');
+    }
+
+    // --- Local fallback ---
     const order: PaperOrder = {
       id: genId(),
       time: new Date().toISOString(),
@@ -195,10 +302,26 @@ export default function TradePage() {
     saveOrders([order, ...orders]);
   }
 
-  function resetPaper() {
+  async function resetPaper() {
     if (!confirm('Reset paper balance to $10,000 and clear orders?')) return;
+
+    // Local reset
     saveBalance(10000);
     saveOrders([]);
+
+    // DB reset balance (keep orders for now)
+    if (userId) {
+      await supabase.from('balances').update({ balance: 10000 }).eq('user_id', userId);
+
+      const { data: orderRows } = await supabase
+        .from('orders')
+        .select('id,created_at,market,symbol,side,order_type,qty,price,total')
+        .eq('user_id', userId)
+        .order('created_at', { ascending: false })
+        .limit(20);
+
+      if (orderRows) setOrders(mapDbOrders(orderRows as any));
+    }
   }
 
   // ✅ Mobile responsive CSS (desktop 2-col, phone 1-col)
@@ -210,12 +333,33 @@ export default function TradePage() {
     .tv-gainers { height: 360px; }
     .tv-tape { height: 46px; }
 
+    /* Mobile Chart / Transaction tabs */
+    .mTabs { display: none; gap: 10px; margin: 12px 0 14px; }
+    .mTab {
+      flex: 1;
+      padding: 10px 12px;
+      border-radius: 12px;
+      border: 1px solid #222;
+      background: #0f0f0f;
+      color: #cbd5e1;
+      font-weight: 900;
+      cursor: pointer;
+    }
+    .mTab.active { background: #1f2937; color: #ffffff; }
+
+    /* On desktop both are visible; on mobile only active tab is visible */
+    .paneMobileHide { display: block; }
+
     @media (max-width: 900px) {
+      .mTabs { display: flex; }
       .tv-grid { grid-template-columns: 1fr; }
       .tv-chart { height: 420px; }
       .tv-screener { height: 360px; }
       .tv-gainers { height: 420px; }
       .tv-tape { height: 56px; }
+
+      .paneMobileHide { display: none; }
+      .paneMobileShow { display: block; }
     }
 
     @media (max-width: 480px) {
@@ -231,10 +375,6 @@ export default function TradePage() {
 
       <h1 style={{ fontSize: 24, marginBottom: 12 }}>Trade</h1>
 
-      {/* Quotes */}
-      <div style={{ marginBottom: 16 }}>
-        <iframe src={tickerTapeSrc} className="tv-tape" style={{ width: '100%', border: 'none' }} />
-      </div>
 
       {/* Tabs */}
       <div style={{ display: 'flex', gap: 10, marginBottom: 12, flexWrap: 'wrap' }}>
@@ -256,10 +396,29 @@ export default function TradePage() {
         ))}
       </div>
 
+      {/* Mobile Tabs (Chart / Transaction) */}
+      <div className="mTabs">
+        <button
+          className={mobileTab === 'chart' ? 'mTab active' : 'mTab'}
+          onClick={() => setMobileTab('chart')}
+        >
+          Chart
+        </button>
+        <button
+          className={mobileTab === 'tx' ? 'mTab active' : 'mTab'}
+          onClick={() => setMobileTab('tx')}
+        >
+          Transaction
+        </button>
+      </div>
+
       {/* Main Grid */}
       <div className="tv-grid">
         {/* Chart */}
-        <div style={{ background: '#111', padding: 8, borderRadius: 10, border: '1px solid #222' }}>
+        <div
+          className={mobileTab === 'chart' ? 'paneMobileShow' : 'paneMobileHide'}
+          style={{ background: '#111', padding: 8, borderRadius: 10, border: '1px solid #222' }}
+        >
           <div style={{ color: '#94a3b8', fontSize: 12, marginBottom: 6 }}>
             Chart: {activeMarket.title} ({activeMarket.chartSymbol})
           </div>
@@ -272,7 +431,7 @@ export default function TradePage() {
         </div>
 
         {/* Right column */}
-        <div className="tv-right">
+        <div className={`tv-right ${mobileTab === 'tx' ? 'paneMobileShow' : 'paneMobileHide'}`}>
           {/* Paper Trade Panel */}
           <div style={{ background: '#111', padding: 14, borderRadius: 10, border: '1px solid #222' }}>
             <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', marginBottom: 10 }}>
