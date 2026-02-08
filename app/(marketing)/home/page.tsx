@@ -1,17 +1,21 @@
 'use client';
 
-import React, { useEffect, useRef } from 'react';
+import React, { useEffect, useRef, useState } from 'react';
 import Link from 'next/link';
 import Image from 'next/image';
 
 export default function HomeLanding() {
   const logoRef = useRef<HTMLImageElement | null>(null);
+  const [year, setYear] = useState<string>('');
 
   useEffect(() => {
+    // Avoid SSR/client hydration mismatch by computing time-based values on the client.
+    setYear(String(new Date().getFullYear()));
+
     const onScroll = () => {
       if (!logoRef.current) return;
       const y = window.scrollY;
-      const opacity = Math.max(0, 0.08 - y / 1200);
+      const opacity = Math.max(0, 0.08 - y / 900);
       logoRef.current.style.opacity = String(opacity);
     };
     window.addEventListener('scroll', onScroll, { passive: true });
@@ -69,11 +73,39 @@ export default function HomeLanding() {
 
         /* background */
         .bg{
+          position: relative;
           background:
             radial-gradient(900px 420px at 50% 10%, rgba(59,130,246,.20), transparent 60%),
             radial-gradient(900px 420px at 0% 20%, rgba(34,211,238,.14), transparent 55%),
             #050607;
         }
+
+        /* hero background logo (behind content) */
+        .heroLogo{
+          position: fixed;
+          inset: 0;
+          margin: auto;
+          width: min(520px, 90vw);
+          height: auto;
+          opacity: .08;
+          pointer-events: none;
+          z-index: 0;
+          filter: drop-shadow(0 24px 80px rgba(0,0,0,.55));
+          will-change: opacity, transform;
+          transform: translateZ(0) scale(1);
+          animation: logoFloat 6s ease-in-out infinite;
+        }
+        @keyframes logoFloat{
+          0%,100% { transform: translateZ(0) translateY(0) scale(1); }
+          50%     { transform: translateZ(0) translateY(-6px) scale(1.01); }
+        }
+        @media (prefers-reduced-motion: reduce){
+          .heroLogo{ animation: none; }
+          .hTitle,.hSub,.heroGlow,.heroLine,.swipeItem{ animation: none !important; opacity: 1 !important; transform: none !important; filter: none !important; }
+        }
+
+        /* keep all content above the heroLogo */
+        .layer{ position: relative; z-index: 1; }
 
         .container{max-width:1200px; margin:0 auto; padding:22px 14px 28px;}
         .hero{
@@ -249,18 +281,11 @@ export default function HomeLanding() {
       <div className="bg">
         <img
           ref={logoRef}
+          className="heroLogo"
           src="/openbook-logo.svg"
           alt="OPENBOOK"
-          style={{
-            position: 'absolute',
-            inset: 0,
-            margin: 'auto',
-            width: 'min(520px, 90vw)',
-            opacity: 0.08,
-            pointerEvents: 'none',
-            transition: 'opacity 0.2s linear'
-          }}
         />
+        <div className="layer">
         <div className="topbar">
           <div className="topbarInner">
             <div className="brand">
@@ -372,10 +397,11 @@ export default function HomeLanding() {
 
               <div style={{ height: 16 }} />
               <div className="muted" style={{ textAlign: 'center' }}>
-                © {new Date().getFullYear()} OPENBOOK. All rights reserved.
+                © {year} OPENBOOK. All rights reserved.
               </div>
             </div>
           </div>
+        </div>
         </div>
       </div>
     </div>
