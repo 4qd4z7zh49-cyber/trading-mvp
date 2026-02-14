@@ -90,6 +90,7 @@ export default function NotifyPanel() {
     try {
       const r = await fetch("/api/admin/users", {
         cache: "no-store",
+        credentials: "include",
       });
       const j = await readJson<UsersResp>(r);
       if (!r.ok) {
@@ -116,6 +117,7 @@ export default function NotifyPanel() {
       if (userId) params.set("userId", userId);
       const r = await fetch(`/api/admin/notify?${params.toString()}`, {
         cache: "no-store",
+        credentials: "include",
       });
       const j = await readJson<NotifyListResp>(r);
       if (!r.ok || !j?.ok) {
@@ -159,6 +161,7 @@ export default function NotifyPanel() {
     try {
       const r = await fetch("/api/admin/notify", {
         method: "POST",
+        credentials: "include",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
           userId: selectedUserId,

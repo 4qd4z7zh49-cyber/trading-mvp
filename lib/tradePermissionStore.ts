@@ -18,6 +18,7 @@ type PermissionRow = {
 };
 
 type PermissionCache = Map<string, PermissionCore>;
+const MEMORY_FALLBACK_ALLOWED = process.env.NODE_ENV !== "production";
 
 declare global {
   var __openbookTradePermissionCache: PermissionCache | undefined;
@@ -44,6 +45,10 @@ function normalizeRow(row?: PermissionCore | null): PermissionCore {
   };
 }
 
+function missingTradePermissionsTableError() {
+  return new Error("Missing table: public.trade_permissions. Run sql/trade_permissions.sql");
+}
+
 export async function getPermissionForUser(
   supabase: SupabaseClient,
   userId: string
@@ -56,6 +61,7 @@ export async function getPermissionForUser(
 
   if (error) {
     if (!isMissingTableError(error)) throw error;
+    if (!MEMORY_FALLBACK_ALLOWED) throw missingTradePermissionsTableError();
     const fallback = getCache().get(userId);
     if (!fallback) return { ...normalizeRow(null), source: "default" };
     return { ...normalizeRow(fallback), source: "memory" };
@@ -84,6 +90,7 @@ export async function getPermissionsForUsers(
 
   if (error) {
     if (!isMissingTableError(error)) throw error;
+    if (!MEMORY_FALLBACK_ALLOWED) throw missingTradePermissionsTableError();
 
     const cache = getCache();
     userIds.forEach((uid) => {
@@ -135,6 +142,7 @@ export async function setPermissionForUser(
 
   if (error) {
     if (!isMissingTableError(error)) throw error;
+    if (!MEMORY_FALLBACK_ALLOWED) throw missingTradePermissionsTableError();
     getCache().set(userId, normalizeRow(next));
     return { ...normalizeRow(next), source: "memory" };
   }

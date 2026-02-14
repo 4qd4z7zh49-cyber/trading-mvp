@@ -21,6 +21,9 @@ type WalletStateResponse = {
 type PriceResponse = {
   ok?: boolean;
   error?: string;
+  warning?: string;
+  stale?: boolean;
+  source?: string;
   priceUSDT?: Partial<Record<Asset, number | null>>;
 };
 
@@ -171,19 +174,25 @@ export default function WalletPage() {
       if (!json?.ok || !json?.priceUSDT) {
         throw new Error(json?.error || "Failed to load prices");
       }
+      const priceUSDT = json.priceUSDT;
 
-      setPrices({
-        USDT: Number(json.priceUSDT.USDT ?? 1),
+      setPrices((prev) => ({
+        USDT: Number(priceUSDT.USDT ?? prev.USDT ?? 1),
         BTC:
-          typeof json.priceUSDT.BTC === "number" ? Number(json.priceUSDT.BTC) : null,
+          typeof priceUSDT.BTC === "number" ? Number(priceUSDT.BTC) : prev.BTC,
         ETH:
-          typeof json.priceUSDT.ETH === "number" ? Number(json.priceUSDT.ETH) : null,
+          typeof priceUSDT.ETH === "number" ? Number(priceUSDT.ETH) : prev.ETH,
         SOL:
-          typeof json.priceUSDT.SOL === "number" ? Number(json.priceUSDT.SOL) : null,
+          typeof priceUSDT.SOL === "number" ? Number(priceUSDT.SOL) : prev.SOL,
         XRP:
-          typeof json.priceUSDT.XRP === "number" ? Number(json.priceUSDT.XRP) : null,
-      });
-      setPriceErr("");
+          typeof priceUSDT.XRP === "number" ? Number(priceUSDT.XRP) : prev.XRP,
+      }));
+
+      if (json.stale) {
+        setPriceErr(json.warning || "Using cached prices");
+      } else {
+        setPriceErr("");
+      }
     } catch (e: unknown) {
       const message = e instanceof Error ? e.message : "Failed to load prices";
       setPriceErr(message);

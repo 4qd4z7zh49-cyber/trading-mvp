@@ -5,6 +5,7 @@ import {
   getSupabaseServiceRoleKey,
   getSupabaseUrl,
 } from "@/lib/supabaseEnv";
+import { getPriceFeed } from "@/lib/priceFeed";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -12,22 +13,10 @@ export const dynamic = "force-dynamic";
 const ASSETS = ["USDT", "BTC", "ETH", "SOL", "XRP"] as const;
 type Asset = (typeof ASSETS)[number];
 
-type PriceUSDT = Record<Asset, number | null>;
-
 type ExchangeBody = {
   fromAsset?: string;
   toAsset?: string;
   amount?: number | string;
-};
-
-const COINGECKO = "https://api.coingecko.com/api/v3/simple/price";
-const BINANCE = "https://api.binance.com/api/v3/ticker/price";
-
-const COIN_ID: Record<Exclude<Asset, "USDT">, string> = {
-  BTC: "bitcoin",
-  ETH: "ethereum",
-  SOL: "solana",
-  XRP: "ripple",
 };
 
 function toNumber(v: unknown): number {
@@ -87,78 +76,6 @@ async function resolveUserId(req: Request, svc: SupabaseClient) {
   return "";
 }
 
-async function fromCoingecko(vs: "usdt" | "usd"): Promise<PriceUSDT | null> {
-  const ids = Object.values(COIN_ID).join(",");
-  const url = `${COINGECKO}?ids=${encodeURIComponent(ids)}&vs_currencies=${vs}`;
-  const res = await fetch(url, {
-    cache: "no-store",
-    headers: { accept: "application/json" },
-  });
-  if (!res.ok) return null;
-
-  const data = (await res.json()) as Record<string, Record<string, unknown>>;
-  const btc = toNumber(data[COIN_ID.BTC]?.[vs]);
-  const eth = toNumber(data[COIN_ID.ETH]?.[vs]);
-  const sol = toNumber(data[COIN_ID.SOL]?.[vs]);
-  const xrp = toNumber(data[COIN_ID.XRP]?.[vs]);
-
-  const val = (n: number) => (Number.isFinite(n) ? n : null);
-  if (![btc, eth, sol, xrp].some(Number.isFinite)) return null;
-
-  return {
-    USDT: 1,
-    BTC: val(btc),
-    ETH: val(eth),
-    SOL: val(sol),
-    XRP: val(xrp),
-  };
-}
-
-type BinanceTicker = { symbol: string; price: string };
-const BINANCE_SYMBOLS = ["BTCUSDT", "ETHUSDT", "SOLUSDT", "XRPUSDT"] as const;
-
-async function fromBinance(): Promise<PriceUSDT | null> {
-  const symbols = encodeURIComponent(JSON.stringify(BINANCE_SYMBOLS));
-  const url = `${BINANCE}?symbols=${symbols}`;
-  const res = await fetch(url, {
-    cache: "no-store",
-    headers: { accept: "application/json" },
-  });
-  if (!res.ok) return null;
-
-  const rows = (await res.json()) as BinanceTicker[];
-  if (!Array.isArray(rows) || rows.length === 0) return null;
-
-  const map = new Map<string, number | null>();
-  rows.forEach((r) => {
-    const n = toNumber(r.price);
-    map.set(r.symbol, Number.isFinite(n) ? n : null);
-  });
-
-  const btc = map.get("BTCUSDT") ?? null;
-  const eth = map.get("ETHUSDT") ?? null;
-  const sol = map.get("SOLUSDT") ?? null;
-  const xrp = map.get("XRPUSDT") ?? null;
-
-  if (btc == null && eth == null && sol == null && xrp == null) return null;
-
-  return {
-    USDT: 1,
-    BTC: btc,
-    ETH: eth,
-    SOL: sol,
-    XRP: xrp,
-  };
-}
-
-async function fetchPricesUSDT() {
-  return (
-    (await fromCoingecko("usdt")) ??
-    (await fromCoingecko("usd")) ??
-    (await fromBinance())
-  );
-}
-
 async function readHoldings(svc: SupabaseClient, userId: string) {
   const { data: balRow, error: balErr } = await svc
     .from("balances")
@@ -211,10 +128,14 @@ export async function POST(req: Request) {
       return NextResponse.json({ error: "Invalid amount" }, { status: 400 });
     }
 
-    const prices = await fetchPricesUSDT();
-    if (!prices) {
-      return NextResponse.json({ error: "Price unavailable" }, { status: 503 });
+    const priceFeed = await getPriceFeed();
+    if (!priceFeed.ok) {
+      return NextResponse.json(
+        { error: priceFeed.error || "Price unavailable" },
+        { status: 503 }
+      );
     }
+    const prices = priceFeed.priceUSDT;
 
     const fromPrice = fromAsset === "USDT" ? 1 : Number(prices[fromAsset] ?? NaN);
     const toPrice = toAsset === "USDT" ? 1 : Number(prices[toAsset] ?? NaN);
@@ -264,6 +185,8 @@ export async function POST(req: Request) {
       toAsset,
       spentAmount: spend,
       receivedAmount: receive,
+      priceSource: priceFeed.source,
+      stalePrice: Boolean(priceFeed.stale),
       holdings: next,
     });
   } catch (e: unknown) {

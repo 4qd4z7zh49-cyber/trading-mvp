@@ -331,6 +331,7 @@ export default function TradePanel() {
   const [analysisIdx, setAnalysisIdx] = useState(0);
   const [analysisVisible, setAnalysisVisible] = useState(true);
   const [actionErr, setActionErr] = useState("");
+  const [startLoading, setStartLoading] = useState<Side | "">("");
   const [claimLoading, setClaimLoading] = useState(false);
   const [settlementInfo, setSettlementInfo] = useState("");
   const [history, setHistory] = useState<HistoryRecord[]>([]);
@@ -434,8 +435,10 @@ export default function TradePanel() {
       const noise = (Math.random() - 0.5) * current.amountUSDT * 0.0012;
 
       let nextProfit = round2(drift + wave + noise);
-      if (current.side === "BUY") {
-        nextProfit = Math.max(nextProfit, round2(-current.amountUSDT * 0.01));
+      if (current.permissionEnabled) {
+        nextProfit = Math.max(0, nextProfit);
+      } else {
+        nextProfit = Math.min(0, nextProfit);
       }
 
       const direction =
@@ -549,13 +552,9 @@ export default function TradePanel() {
     };
   }, [balance, router, session, sessionPhase]);
 
-  const startSession = (side: Side) => {
+  const startSession = async (side: Side) => {
     setActionErr("");
     setSettlementInfo("");
-    if (tradeRestricted) {
-      setActionErr("Your account is restricted.");
-      return;
-    }
     if (sessionBusy || sessionPhase === "CLAIMABLE") {
       setActionErr("Current session is still active. Claim or wait first.");
       return;
@@ -577,11 +576,40 @@ export default function TradePanel() {
       return;
     }
 
+    let latestPermission = permission;
+    let latestRestricted = tradeRestricted;
+    setStartLoading(side);
+    try {
+      const fresh = await fetchTradePermission();
+      latestPermission = { buyEnabled: fresh.buyEnabled, sellEnabled: fresh.sellEnabled };
+      latestRestricted = Boolean(fresh.restricted);
+      setPermission(latestPermission);
+      setTradeRestricted(latestRestricted);
+      setPermissionErr("");
+    } catch (e: unknown) {
+      const message = e instanceof Error ? e.message : "Failed to load trade permission";
+      if (isUnauthorizedMessage(message) && !redirectedRef.current) {
+        redirectedRef.current = true;
+        router.replace("/login?next=/trade");
+        return;
+      }
+      setPermissionErr(message);
+      setActionErr(message);
+      return;
+    } finally {
+      setStartLoading("");
+    }
+
+    if (latestRestricted) {
+      setActionErr("Your account is restricted.");
+      return;
+    }
+
     const now = Date.now();
     const runStartedAt = now + 5_000;
     const endAt = runStartedAt + 40_000;
 
-    const permissionEnabled = side === "BUY" ? permission.buyEnabled : permission.sellEnabled;
+    const permissionEnabled = side === "BUY" ? latestPermission.buyEnabled : latestPermission.sellEnabled;
     const sign = permissionEnabled ? 1 : -1;
     const targetPct = sign * selectedTier.pct * randomBetween(0.92, 1.08);
 
@@ -677,6 +705,9 @@ export default function TradePanel() {
       setClaimLoading(false);
     }
   };
+
+  const sessionLocked =
+    tradeRestricted || sessionBusy || sessionPhase === "CLAIMABLE" || Boolean(startLoading);
 
   const summary = useMemo(() => {
     if (!session) return null;
@@ -781,18 +812,18 @@ export default function TradePanel() {
           <button
             type="button"
             onClick={() => startSession("BUY")}
-            disabled={tradeRestricted || sessionBusy || sessionPhase === "CLAIMABLE"}
+            disabled={sessionLocked}
             className="rounded-xl bg-emerald-600 py-3 font-bold text-white disabled:opacity-50"
           >
-            Start BUY
+            {startLoading === "BUY" ? "Checking..." : "Start BUY"}
           </button>
           <button
             type="button"
             onClick={() => startSession("SELL")}
-            disabled={tradeRestricted || sessionBusy || sessionPhase === "CLAIMABLE"}
+            disabled={sessionLocked}
             className="rounded-xl bg-rose-600 py-3 font-bold text-white disabled:opacity-50"
           >
-            Start SELL
+            {startLoading === "SELL" ? "Checking..." : "Start SELL"}
           </button>
         </div>
       </div>

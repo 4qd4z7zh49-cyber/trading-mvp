@@ -50,12 +50,15 @@ export default function AdminSidebar() {
         const [depRes, wdRes, notifyRes] = await Promise.all([
           fetch("/api/admin/deposit-requests?status=PENDING&limit=1", {
             cache: "no-store",
+            credentials: "include",
           }),
           fetch("/api/admin/withdraw-requests?status=PENDING&limit=1", {
             cache: "no-store",
+            credentials: "include",
           }),
           fetch("/api/admin/notify?status=PENDING&limit=1", {
             cache: "no-store",
+            credentials: "include",
           }),
         ]);
 

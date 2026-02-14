@@ -1,5 +1,5 @@
 import { NextResponse } from "next/server";
-import { assertCanManageUser, requireAdminSession, supabaseAdmin } from "../_helpers";
+import { assertCanManageUser, readCookie, requireAdminSession, supabaseAdmin } from "../_helpers";
 
 export const dynamic = "force-dynamic";
 
@@ -18,6 +18,22 @@ function parseBody(value: unknown): Body {
 
 function isRootAdmin(role: string) {
   return role === "admin" || role === "superadmin";
+}
+
+function resolveNotifyAuth(req: Request) {
+  const strict = requireAdminSession(req);
+  if (strict) return strict;
+
+  const session = readCookie(req, "admin_session");
+  const role = String(readCookie(req, "admin_role") || "");
+  const adminId = String(readCookie(req, "admin_id") || "");
+  if (!session || !role) return null;
+
+  // Fallback: allow root admin access even when admin_id cookie is missing.
+  if (isRootAdmin(role)) {
+    return { role, adminId };
+  }
+  return null;
 }
 
 function normalizeStatus(value: unknown): NotifyStatus {
@@ -44,7 +60,7 @@ async function pendingCount(role: string, adminId: string) {
 }
 
 export async function GET(req: Request) {
-  const auth = requireAdminSession(req);
+  const auth = resolveNotifyAuth(req);
   if (!auth) return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
 
   const { role, adminId } = auth;
@@ -122,7 +138,7 @@ export async function GET(req: Request) {
 }
 
 export async function POST(req: Request) {
-  const auth = requireAdminSession(req);
+  const auth = resolveNotifyAuth(req);
   if (!auth) return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
 
   const { role, adminId } = auth;
@@ -150,7 +166,7 @@ export async function POST(req: Request) {
       .from("user_notifications")
       .insert({
         user_id: userId,
-        admin_id: adminId,
+        admin_id: adminId || null,
         subject,
         message,
         status: "PENDING",
