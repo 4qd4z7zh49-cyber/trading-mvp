@@ -1,156 +1,907 @@
 "use client";
 
-import { useEffect, useMemo, useState } from "react";
-import TradeOrders from "./TradeOrders";
-import { useTradeAction, type Side } from "./useTradeAction";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { supabase } from "@/lib/supabaseClient";
 
-type LeverageTier = {
-  id: string;
-  label: string;
-  pct: number; // leverage percent
+type Side = "BUY" | "SELL";
+type TradeAsset = "BTC" | "ETH" | "GOLD" | "XRP" | "SOL";
+
+type TradePermissionResponse = {
+  ok?: boolean;
+  error?: string;
+  buyEnabled?: boolean;
+  sellEnabled?: boolean;
+  restricted?: boolean;
 };
 
-const TIERS: LeverageTier[] = [
-  { id: "t1", label: "$0 - $5,000", pct: 30 },
-  { id: "t2", label: "$5,000 - $10,000", pct: 40 },
-  { id: "t3", label: "$10,000 - $30,000", pct: 60 },
-  { id: "t4", label: "$30,000 - $50,000", pct: 80 },
-  { id: "t5", label: "$100,000 - Unlimited", pct: 120 },
+type WalletStateResponse = {
+  ok?: boolean;
+  error?: string;
+  holdings?: Record<string, number>;
+};
+
+type AdjustResponse = {
+  ok?: boolean;
+  error?: string;
+  balanceUSDT?: number;
+};
+
+type SessionPhase = "IDLE" | "ANALYZING" | "RUNNING" | "CLAIMABLE";
+
+type QuantityTier = {
+  id: string;
+  min: number;
+  max: number;
+  pct: number; // 0.3 = 30%
+};
+
+type TradeSession = {
+  id: string;
+  side: Side;
+  asset: TradeAsset;
+  amountUSDT: number;
+  tierId: string;
+  tierLabel: string;
+  tierPct: number;
+  permissionEnabled: boolean;
+  targetProfitUSDT: number;
+  currentProfitUSDT: number;
+  createdAt: number;
+  runStartedAt: number;
+  endAt: number;
+  remainingSec: number;
+  points: number[];
+};
+
+type HistoryRecord = {
+  id: string;
+  side: Side;
+  asset?: TradeAsset;
+  amountUSDT: number;
+  profitUSDT: number;
+  createdAt: number;
+  claimedAt: number;
+};
+
+const HISTORY_KEY = "openbookpro.trade.history.v2";
+const TRADE_NOTI_KEY = "openbookpro.trade.notifications.v1";
+
+type TradeNotificationStatus = "PENDING" | "CONFIRMED";
+
+type TradeNotification = {
+  id: string;
+  source: "TRADE";
+  status: TradeNotificationStatus;
+  side: Side;
+  asset: TradeAsset;
+  amountUSDT: number;
+  profitUSDT: number | null;
+  createdAt: number;
+  updatedAt: number;
+};
+
+const ANALYSIS_TEXTS = [
+  "Using AI for complicated trading...",
+  "Collecting information across markets...",
+  "Projecting trend and timing the move...",
 ];
+const QUANTITY_TIERS: QuantityTier[] = [
+  { id: "q1", min: 300, max: 10_000, pct: 0.3 },
+  { id: "q2", min: 10_000, max: 30_000, pct: 0.4 },
+  { id: "q3", min: 30_000, max: 50_000, pct: 0.6 },
+  { id: "q4", min: 50_000, max: 100_000, pct: 0.8 },
+  { id: "q5", min: 100_000, max: 99_999_999, pct: 1.0 },
+];
+const TRADE_ASSETS: TradeAsset[] = ["BTC", "ETH", "GOLD", "XRP", "SOL"];
 
-export default function TradePanel() {
-  const { balance, orders, pnl, place } = useTradeAction();
-  const [side, setSide] = useState<Side>("BUY");
-  const [price, setPrice] = useState("100");
-  const [tierId, setTierId] = useState<string>(TIERS[0].id);
+function normalizeAsset(v: unknown): TradeAsset {
+  const str = String(v || "").toUpperCase();
+  if ((TRADE_ASSETS as readonly string[]).includes(str)) return str as TradeAsset;
+  return "BTC";
+}
 
-  // Premium-feel micro animation for PnL changes (C)
-  const [pnlFlash, setPnlFlash] = useState<"up" | "down" | null>(null);
-  const lastPnl = useMemo(() => pnl, [pnl]);
+function formatMoney(v: number) {
+  return v.toLocaleString(undefined, {
+    minimumFractionDigits: 2,
+    maximumFractionDigits: 2,
+  });
+}
 
-  const tier = useMemo(() => TIERS.find((t) => t.id === tierId) ?? TIERS[0], [tierId]);
+function loadHistory(): HistoryRecord[] {
+  if (typeof window === "undefined") return [];
+  try {
+    const raw = localStorage.getItem(HISTORY_KEY);
+    if (!raw) return [];
+    const parsed = JSON.parse(raw);
+    if (!Array.isArray(parsed)) return [];
+    return parsed.map((r: unknown) => {
+      const row = (r as HistoryRecord) || {};
+      return {
+        ...row,
+        asset: normalizeAsset(row.asset),
+      };
+    }) as HistoryRecord[];
+  } catch {
+    return [];
+  }
+}
 
-  useEffect(() => {
-    // flash when pnl changes
-    setPnlFlash((prev) => {
-      // if pnl is 0 or unchanged, no flash
-      return pnl > 0 ? "up" : pnl < 0 ? "down" : null;
+function saveHistory(next: HistoryRecord[]) {
+  if (typeof window === "undefined") return;
+  localStorage.setItem(HISTORY_KEY, JSON.stringify(next));
+}
+
+function loadTradeNotifications(): TradeNotification[] {
+  if (typeof window === "undefined") return [];
+  try {
+    const raw = localStorage.getItem(TRADE_NOTI_KEY);
+    if (!raw) return [];
+    const parsed = JSON.parse(raw);
+    if (!Array.isArray(parsed)) return [];
+
+    return parsed.map((item: unknown) => {
+      const row = (item as Partial<TradeNotification>) || {};
+      const status = String(row.status || "").toUpperCase() === "CONFIRMED" ? "CONFIRMED" : "PENDING";
+      return {
+        id: String(row.id || crypto.randomUUID()),
+        source: "TRADE",
+        status,
+        side: row.side === "SELL" ? "SELL" : "BUY",
+        asset: normalizeAsset(row.asset),
+        amountUSDT: Number(row.amountUSDT ?? 0),
+        profitUSDT:
+          typeof row.profitUSDT === "number" && Number.isFinite(row.profitUSDT)
+            ? Number(row.profitUSDT)
+            : null,
+        createdAt: Number(row.createdAt ?? Date.now()),
+        updatedAt: Number(row.updatedAt ?? row.createdAt ?? Date.now()),
+      } satisfies TradeNotification;
     });
-    if (pnl !== 0) {
-      const t = window.setTimeout(() => setPnlFlash(null), 550);
-      return () => window.clearTimeout(t);
-    }
-  }, [lastPnl, pnl]);
+  } catch {
+    return [];
+  }
+}
 
-  const pnlColor = pnl > 0 ? "text-emerald-400" : pnl < 0 ? "text-rose-400" : "text-gray-300";
+function upsertTradeNotification(next: TradeNotification) {
+  if (typeof window === "undefined") return;
+  const rows = loadTradeNotifications();
+  const idx = rows.findIndex((x) => x.id === next.id);
+  if (idx >= 0) rows[idx] = next;
+  else rows.unshift(next);
+  localStorage.setItem(TRADE_NOTI_KEY, JSON.stringify(rows.slice(0, 300)));
+}
+
+function round2(v: number) {
+  return Math.round((v + Number.EPSILON) * 100) / 100;
+}
+
+function randomBetween(min: number, max: number) {
+  return min + Math.random() * (max - min);
+}
+
+async function authHeaders(): Promise<Record<string, string>> {
+  const { data } = await supabase.auth.getSession();
+  const token = data.session?.access_token;
+  if (!token) return {};
+  return { Authorization: `Bearer ${token}` };
+}
+
+async function fetchWalletUSDT() {
+  const res = await fetch("/api/wallet/state", {
+    cache: "no-store",
+    headers: await authHeaders(),
+  });
+  const json = (await res.json().catch(() => ({}))) as WalletStateResponse;
+  if (!res.ok || !json?.ok) throw new Error(json?.error || "Failed to load wallet");
+  return Number(json.holdings?.USDT ?? 0);
+}
+
+async function fetchTradePermission() {
+  const res = await fetch("/api/trade/permission", {
+    cache: "no-store",
+    headers: await authHeaders(),
+  });
+  const json = (await res.json().catch(() => ({}))) as TradePermissionResponse;
+  if (res.status === 403 && json?.restricted) {
+    return {
+      buyEnabled: false,
+      sellEnabled: false,
+      restricted: true,
+    };
+  }
+  if (!res.ok || !json?.ok) {
+    throw new Error(json?.error || "Failed to load trade permission");
+  }
+  return {
+    buyEnabled: Boolean(json.buyEnabled ?? true),
+    sellEnabled: Boolean(json.sellEnabled ?? true),
+    restricted: Boolean(json.restricted ?? false),
+  };
+}
+
+async function adjustWalletUSDT(deltaUSDT: number) {
+  const tokenHeaders = await authHeaders();
+  const res = await fetch("/api/wallet/adjust", {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json",
+      ...tokenHeaders,
+    },
+    body: JSON.stringify({ deltaUSDT }),
+  });
+
+  const json = (await res.json().catch(() => ({}))) as AdjustResponse;
+  if (!res.ok || !json?.ok) {
+    throw new Error(json?.error || "Failed to update wallet");
+  }
+  return Number(json.balanceUSDT ?? 0);
+}
+
+function MiniLineChart({ points, side }: { points: number[]; side: Side }) {
+  const width = 360;
+  const height = 140;
+  const safe = points.length > 1 ? points : [100, 100.2];
+  const min = Math.min(...safe);
+  const max = Math.max(...safe);
+  const range = Math.max(0.001, max - min);
+  const coords = safe.map((v, i) => {
+    const x = (i / (safe.length - 1)) * width;
+    const y = height - ((v - min) / range) * height;
+    return { x, y };
+  });
+  const path = coords
+    .map((p, idx) => `${idx === 0 ? "M" : "L"} ${p.x.toFixed(2)} ${p.y.toFixed(2)}`)
+    .join(" ");
+  const areaPath = `${path} L ${width} ${height} L 0 ${height} Z`;
+  const last = coords[coords.length - 1];
+
+  const stroke = side === "BUY" ? "#34d399" : "#f87171";
+  const fillId = `sessionLineFill-${side.toLowerCase()}`;
+  const glowId = `sessionLineGlow-${side.toLowerCase()}`;
 
   return (
-    <div className="space-y-4">
-      <div className="flex justify-between text-sm text-gray-300">
-        <span>Balance</span>
-        <b className="text-white">${balance.toLocaleString()}</b>
+    <svg
+      viewBox={`0 0 ${width} ${height}`}
+      className="h-[180px] w-full rounded-xl border border-white/5 bg-[radial-gradient(circle_at_15%_15%,rgba(255,255,255,.06),transparent_40%),radial-gradient(circle_at_85%_85%,rgba(37,99,235,.10),transparent_35%),#070809]"
+    >
+      <defs>
+        <linearGradient id={fillId} x1="0" x2="0" y1="0" y2="1">
+          <stop offset="0%" stopColor={stroke} stopOpacity="0.35" />
+          <stop offset="100%" stopColor={stroke} stopOpacity="0.04" />
+        </linearGradient>
+        <filter id={glowId} x="-20%" y="-20%" width="140%" height="140%">
+          <feGaussianBlur stdDeviation="3.2" result="blur" />
+          <feMerge>
+            <feMergeNode in="blur" />
+            <feMergeNode in="SourceGraphic" />
+          </feMerge>
+        </filter>
+      </defs>
+
+      {Array.from({ length: 6 }).map((_, i) => {
+        const y = (height / 5) * i;
+        return (
+          <line
+            key={`h-${i}`}
+            x1={0}
+            y1={y}
+            x2={width}
+            y2={y}
+            stroke="rgba(255,255,255,.06)"
+            strokeWidth="1"
+          />
+        );
+      })}
+      {Array.from({ length: 7 }).map((_, i) => {
+        const x = (width / 6) * i;
+        return (
+          <line
+            key={`v-${i}`}
+            x1={x}
+            y1={0}
+            x2={x}
+            y2={height}
+            stroke="rgba(255,255,255,.04)"
+            strokeWidth="1"
+          />
+        );
+      })}
+
+      <path d={areaPath} fill={`url(#${fillId})`} />
+      <path d={path} fill="none" stroke={stroke} strokeWidth="6" strokeOpacity="0.22" />
+      <path d={path} fill="none" stroke={stroke} strokeWidth="2.6" filter={`url(#${glowId})`} />
+
+      <circle cx={last.x} cy={last.y} r="8" fill={stroke} opacity="0.18" className="animate-pulse" />
+      <circle cx={last.x} cy={last.y} r="4.2" fill={stroke} stroke="rgba(255,255,255,.8)" strokeWidth="1.1" />
+    </svg>
+  );
+}
+
+export default function TradePanel() {
+  const [balance, setBalance] = useState(0);
+  const [balanceErr, setBalanceErr] = useState("");
+  const [selectedAsset, setSelectedAsset] = useState<TradeAsset>("BTC");
+  const [permission, setPermission] = useState({ buyEnabled: true, sellEnabled: true });
+  const [tradeRestricted, setTradeRestricted] = useState(false);
+  const [permissionErr, setPermissionErr] = useState("");
+  const [amount, setAmount] = useState("300");
+  const [tierId, setTierId] = useState(QUANTITY_TIERS[0].id);
+  const [sessionPhase, setSessionPhase] = useState<SessionPhase>("IDLE");
+  const [session, setSession] = useState<TradeSession | null>(null);
+  const [analysisIdx, setAnalysisIdx] = useState(0);
+  const [analysisVisible, setAnalysisVisible] = useState(true);
+  const [actionErr, setActionErr] = useState("");
+  const [claimLoading, setClaimLoading] = useState(false);
+  const [settlementInfo, setSettlementInfo] = useState("");
+  const [history, setHistory] = useState<HistoryRecord[]>([]);
+  const [historyLoaded, setHistoryLoaded] = useState(false);
+  const sessionRef = useRef<TradeSession | null>(null);
+  const autoSettledLossSessionIdRef = useRef("");
+
+  const sessionBusy = sessionPhase === "ANALYZING" || sessionPhase === "RUNNING";
+  const selectedTier = useMemo(
+    () => QUANTITY_TIERS.find((t) => t.id === tierId) ?? QUANTITY_TIERS[0],
+    [tierId]
+  );
+
+  const loadStatus = useCallback(async () => {
+    try {
+      const [wallet, perm] = await Promise.all([fetchWalletUSDT(), fetchTradePermission()]);
+      setBalance(wallet);
+      setPermission({ buyEnabled: perm.buyEnabled, sellEnabled: perm.sellEnabled });
+      setTradeRestricted(Boolean(perm.restricted));
+      setBalanceErr("");
+      setPermissionErr("");
+    } catch (e: unknown) {
+      const message = e instanceof Error ? e.message : "Failed to load trade state";
+      if (message.toLowerCase().includes("wallet")) setBalanceErr(message);
+      else setPermissionErr(message);
+    }
+  }, []);
+
+  useEffect(() => {
+    const run = () => {
+      void loadStatus();
+    };
+    const kick = window.setTimeout(run, 0);
+    const t = window.setInterval(() => {
+      run();
+    }, 6_000);
+    return () => {
+      window.clearTimeout(kick);
+      window.clearInterval(t);
+    };
+  }, [loadStatus]);
+
+  useEffect(() => {
+    setHistory(loadHistory());
+    setHistoryLoaded(true);
+  }, []);
+
+  useEffect(() => {
+    if (!historyLoaded) return;
+    saveHistory(history);
+  }, [history, historyLoaded]);
+
+  useEffect(() => {
+    sessionRef.current = session;
+  }, [session]);
+
+  useEffect(() => {
+    if (sessionPhase !== "ANALYZING") return;
+
+    setAnalysisIdx(0);
+    setAnalysisVisible(true);
+    let fadeTimer = 0;
+
+    const rotate = window.setInterval(() => {
+      setAnalysisVisible(false);
+      fadeTimer = window.setTimeout(() => {
+        setAnalysisIdx((idx) => (idx + 1) % ANALYSIS_TEXTS.length);
+        setAnalysisVisible(true);
+      }, 220);
+    }, 1600);
+
+    const goRun = window.setTimeout(() => {
+      setSessionPhase("RUNNING");
+    }, 5_000);
+
+    return () => {
+      window.clearInterval(rotate);
+      window.clearTimeout(goRun);
+      if (fadeTimer) window.clearTimeout(fadeTimer);
+    };
+  }, [sessionPhase]);
+
+  useEffect(() => {
+    if (sessionPhase !== "RUNNING") return;
+
+    const tick = () => {
+      const current = sessionRef.current;
+      if (!current) return;
+
+      const now = Date.now();
+      const durationMs = Math.max(1, current.endAt - current.runStartedAt);
+      const elapsedMs = Math.max(0, now - current.runStartedAt);
+      const progress = Math.max(0, Math.min(1, elapsedMs / durationMs));
+
+      const drift = current.targetProfitUSDT * progress;
+      const wave = Math.sin(progress * Math.PI * 12) * current.amountUSDT * 0.0022;
+      const noise = (Math.random() - 0.5) * current.amountUSDT * 0.0012;
+
+      let nextProfit = round2(drift + wave + noise);
+      if (current.side === "BUY") {
+        nextProfit = Math.max(nextProfit, round2(-current.amountUSDT * 0.01));
+      }
+
+      const direction =
+        current.permissionEnabled
+          ? current.side === "BUY"
+            ? 1
+            : -1
+          : current.side === "BUY"
+            ? -1
+            : 1;
+      const baseTrend = 100 + progress * direction * 20;
+      const chartWave = Math.sin(progress * Math.PI * 10) * 2.1;
+      const chartNoise = (Math.random() - 0.5) * 1.3;
+      const point = Number((baseTrend + chartWave + chartNoise).toFixed(4));
+
+      const remainingSec = Math.max(0, Math.ceil((durationMs - elapsedMs) / 1000));
+      const nextPoints = [...current.points.slice(-79), point];
+
+      const done = progress >= 1;
+      const updated: TradeSession = {
+        ...current,
+        currentProfitUSDT: done ? round2(current.targetProfitUSDT) : nextProfit,
+        remainingSec,
+        points: nextPoints,
+      };
+
+      sessionRef.current = updated;
+      setSession(updated);
+
+      if (done) {
+        setSessionPhase("CLAIMABLE");
+      }
+    };
+
+    const kick = window.setTimeout(tick, 0);
+    const t = window.setInterval(tick, 1_000);
+    return () => {
+      window.clearTimeout(kick);
+      window.clearInterval(t);
+    };
+  }, [sessionPhase]);
+
+  useEffect(() => {
+    if (sessionPhase !== "CLAIMABLE" || !session) return;
+
+    const delta = round2(session.currentProfitUSDT);
+    if (delta >= 0) return;
+    if (autoSettledLossSessionIdRef.current === session.id) return;
+    autoSettledLossSessionIdRef.current = session.id;
+
+    let cancelled = false;
+    const run = async () => {
+      setClaimLoading(true);
+      setActionErr("");
+      try {
+        let nextBalance = balance;
+        if (Math.abs(delta) >= 0.01) {
+          nextBalance = await adjustWalletUSDT(delta);
+        }
+        if (cancelled) return;
+
+        setBalance(nextBalance);
+        const item: HistoryRecord = {
+          id: session.id,
+          side: session.side,
+          asset: session.asset,
+          amountUSDT: session.amountUSDT,
+          profitUSDT: delta,
+          createdAt: session.createdAt,
+          claimedAt: Date.now(),
+        };
+        setHistory((prev) => [item, ...prev].slice(0, 200));
+        upsertTradeNotification({
+          id: session.id,
+          source: "TRADE",
+          status: "CONFIRMED",
+          side: session.side,
+          asset: session.asset,
+          amountUSDT: session.amountUSDT,
+          profitUSDT: delta,
+          createdAt: session.createdAt,
+          updatedAt: Date.now(),
+        });
+        setSettlementInfo(
+          `Session ended with ${formatMoney(Math.abs(delta))} USDT loss. Deducted automatically.`
+        );
+
+        setSession(null);
+        sessionRef.current = null;
+        setSessionPhase("IDLE");
+      } catch (e: unknown) {
+        if (cancelled) return;
+        const message = e instanceof Error ? e.message : "Auto settlement failed";
+        setActionErr(message);
+      } finally {
+        if (!cancelled) {
+          setClaimLoading(false);
+          autoSettledLossSessionIdRef.current = "";
+        }
+      }
+    };
+
+    void run();
+    return () => {
+      cancelled = true;
+    };
+  }, [balance, session, sessionPhase]);
+
+  const startSession = (side: Side) => {
+    setActionErr("");
+    setSettlementInfo("");
+    if (tradeRestricted) {
+      setActionErr("Your account is restricted.");
+      return;
+    }
+    if (sessionBusy || sessionPhase === "CLAIMABLE") {
+      setActionErr("Current session is still active. Claim or wait first.");
+      return;
+    }
+
+    const amountUSDT = Number(amount);
+    if (!Number.isFinite(amountUSDT) || amountUSDT <= 0) {
+      setActionErr("Enter valid amount (USDT).");
+      return;
+    }
+    if (amountUSDT < selectedTier.min || amountUSDT > selectedTier.max) {
+      setActionErr(
+        `Amount must be within ${selectedTier.min.toLocaleString()} - ${selectedTier.max.toLocaleString()} USDT`
+      );
+      return;
+    }
+    if (amountUSDT > balance) {
+      setActionErr("Insufficient wallet balance.");
+      return;
+    }
+
+    const now = Date.now();
+    const runStartedAt = now + 5_000;
+    const endAt = runStartedAt + 40_000;
+
+    const permissionEnabled = side === "BUY" ? permission.buyEnabled : permission.sellEnabled;
+    const sign = permissionEnabled ? 1 : -1;
+    const targetPct = sign * selectedTier.pct * randomBetween(0.92, 1.08);
+
+    const newSession: TradeSession = {
+      id: crypto.randomUUID(),
+      side,
+      asset: selectedAsset,
+      amountUSDT,
+      tierId: selectedTier.id,
+      tierLabel: `${selectedTier.min.toLocaleString()} - ${selectedTier.max.toLocaleString()}`,
+      tierPct: selectedTier.pct,
+      permissionEnabled,
+      targetProfitUSDT: round2(amountUSDT * targetPct),
+      currentProfitUSDT: 0,
+      createdAt: now,
+      runStartedAt,
+      endAt,
+      remainingSec: 40,
+      points: [100, side === "BUY" ? 100.7 : 99.3],
+    };
+
+    upsertTradeNotification({
+      id: newSession.id,
+      source: "TRADE",
+      status: "PENDING",
+      side: newSession.side,
+      asset: newSession.asset,
+      amountUSDT: newSession.amountUSDT,
+      profitUSDT: null,
+      createdAt: newSession.createdAt,
+      updatedAt: Date.now(),
+    });
+
+    setSession(newSession);
+    sessionRef.current = newSession;
+    setSessionPhase("ANALYZING");
+  };
+
+  const claimProfit = async () => {
+    const current = sessionRef.current;
+    if (!current || sessionPhase !== "CLAIMABLE") return;
+
+    setClaimLoading(true);
+    setActionErr("");
+
+    try {
+      const delta = round2(current.currentProfitUSDT);
+      let nextBalance = balance;
+
+      if (Math.abs(delta) >= 0.01) {
+        nextBalance = await adjustWalletUSDT(delta);
+      }
+
+      setBalance(nextBalance);
+
+      const item: HistoryRecord = {
+        id: current.id,
+        side: current.side,
+        asset: current.asset,
+        amountUSDT: current.amountUSDT,
+        profitUSDT: delta,
+        createdAt: current.createdAt,
+        claimedAt: Date.now(),
+      };
+      setHistory((prev) => [item, ...prev].slice(0, 200));
+      upsertTradeNotification({
+        id: current.id,
+        source: "TRADE",
+        status: "CONFIRMED",
+        side: current.side,
+        asset: current.asset,
+        amountUSDT: current.amountUSDT,
+        profitUSDT: delta,
+        createdAt: current.createdAt,
+        updatedAt: Date.now(),
+      });
+
+      setSession(null);
+      sessionRef.current = null;
+      setSessionPhase("IDLE");
+      setSettlementInfo(
+        `Claimed ${delta >= 0 ? "+" : ""}${formatMoney(delta)} USDT and added to wallet.`
+      );
+    } catch (e: unknown) {
+      const message = e instanceof Error ? e.message : "Claim failed";
+      setActionErr(message);
+    } finally {
+      setClaimLoading(false);
+    }
+  };
+
+  const summary = useMemo(() => {
+    if (!session) return null;
+
+    return {
+      side: session.side,
+      asset: session.asset,
+      amountUSDT: session.amountUSDT,
+      currentProfitUSDT: session.currentProfitUSDT,
+      remainingSec: session.remainingSec,
+      tierLabel: session.tierLabel,
+      tierPct: session.tierPct,
+      profitClass: session.currentProfitUSDT >= 0 ? "text-emerald-300" : "text-rose-300",
+    };
+  }, [session]);
+
+  const onTierChange = (nextTierId: string) => {
+    const next = QUANTITY_TIERS.find((t) => t.id === nextTierId);
+    if (!next) return;
+    setTierId(next.id);
+
+    const currentAmount = Number(amount);
+    if (!Number.isFinite(currentAmount) || currentAmount < next.min || currentAmount > next.max) {
+      setAmount(String(next.min));
+    }
+  };
+
+  return (
+    <div className="min-w-0 space-y-4">
+      <div className="rounded-2xl border border-white/10 bg-neutral-950 p-4">
+        <div className="flex flex-wrap items-center justify-between gap-2 text-sm text-gray-300">
+          <span>Wallet Balance (USDT)</span>
+          <b className="shrink-0 text-white">{formatMoney(balance)}</b>
+        </div>
+        <div className="mt-3 text-sm text-gray-300">Choose your asset</div>
+        <select
+          value={selectedAsset}
+          onChange={(e) => setSelectedAsset(normalizeAsset(e.target.value))}
+          className="mt-2 w-full rounded-xl border border-neutral-800 bg-neutral-900 p-3 text-white outline-none focus:ring-2 focus:ring-blue-500/30"
+        >
+          {TRADE_ASSETS.map((asset) => (
+            <option key={asset} value={asset}>
+              {asset}
+            </option>
+          ))}
+        </select>
+        {!!balanceErr && <div className="mt-2 text-xs text-red-300">{balanceErr}</div>}
       </div>
 
-      <div className="grid grid-cols-2 gap-2">
-        {(["BUY", "SELL"] as Side[]).map((s) => (
+      <div className="rounded-2xl border border-white/10 bg-neutral-950 p-4">
+        <div className="mb-2 text-sm text-gray-300">Choose your quantity</div>
+        <select
+          value={tierId}
+          onChange={(e) => onTierChange(e.target.value)}
+          className="mb-3 w-full rounded-xl border border-neutral-800 bg-neutral-900 p-3 text-white outline-none focus:ring-2 focus:ring-blue-500/30"
+        >
+          {QUANTITY_TIERS.map((t) => (
+            <option key={t.id} value={t.id}>
+              {t.min.toLocaleString()} - {t.max.toLocaleString()} ({Math.round(t.pct * 100)}%)
+            </option>
+          ))}
+        </select>
+
+        <div className="mb-2 text-sm text-gray-300">Trade Amount (USDT)</div>
+        <div className="flex flex-wrap gap-2">
+          <input
+            value={amount}
+            onChange={(e) => setAmount(e.target.value)}
+            inputMode="decimal"
+            placeholder="100"
+            className="min-w-0 flex-1 rounded-xl border border-neutral-800 bg-neutral-900 p-3 text-white placeholder:text-gray-500 focus:outline-none focus:ring-2 focus:ring-blue-500/30"
+          />
           <button
-            key={s}
-            onClick={() => setSide(s)}
-            className={
-              "py-3 rounded-xl font-bold transition active:scale-[0.99] " +
-              (side === s
-                ? s === "BUY"
-                  ? "bg-emerald-600 text-white shadow-[0_10px_30px_rgba(16,185,129,.25)]"
-                  : "bg-rose-600 text-white shadow-[0_10px_30px_rgba(244,63,94,.22)]"
-                : "bg-neutral-900 text-gray-300 border border-neutral-800 hover:border-neutral-700")
+            type="button"
+            onClick={() =>
+              setAmount(
+                String(
+                  Math.max(
+                    selectedTier.min,
+                    Math.min(selectedTier.max, Math.floor(Math.max(0, balance)))
+                  )
+                )
+              )
             }
+            className="shrink-0 rounded-xl border border-white/10 bg-white/10 px-3 py-2 text-sm text-white/90"
           >
-            {s}
+            Max
           </button>
-        ))}
+        </div>
+        <div className="mt-1 text-xs text-white/50">
+          Range: {selectedTier.min.toLocaleString()} - {selectedTier.max.toLocaleString()} USDT (
+          {Math.round(selectedTier.pct * 100)}%)
+        </div>
+        {!!permissionErr && <div className="mt-2 text-xs text-red-300">{permissionErr}</div>}
+        {tradeRestricted ? (
+          <div className="mt-2 rounded-xl border border-rose-400/30 bg-rose-400/10 px-3 py-2 text-xs text-rose-200">
+            Your account is restricted.
+          </div>
+        ) : null}
+
+        <div className="mt-3 grid grid-cols-1 gap-2 sm:grid-cols-2">
+          <button
+            type="button"
+            onClick={() => startSession("BUY")}
+            disabled={tradeRestricted || sessionBusy || sessionPhase === "CLAIMABLE"}
+            className="rounded-xl bg-emerald-600 py-3 font-bold text-white disabled:opacity-50"
+          >
+            Start BUY
+          </button>
+          <button
+            type="button"
+            onClick={() => startSession("SELL")}
+            disabled={tradeRestricted || sessionBusy || sessionPhase === "CLAIMABLE"}
+            className="rounded-xl bg-rose-600 py-3 font-bold text-white disabled:opacity-50"
+          >
+            Start SELL
+          </button>
+        </div>
       </div>
 
-      {/* A: Leverage tier dropdown (user prefers dropdown) */}
-      <div className="space-y-2">
-        <div className="flex items-center justify-between text-sm">
-          <span className="text-gray-300">Enter quantity</span>
-          <span
-            className={
-              "text-xs px-2 py-1 rounded-full border border-neutral-800 bg-neutral-900/60 " +
-              (pnlFlash === "up"
-                ? "ring-2 ring-emerald-500/30"
-                : pnlFlash === "down"
-                ? "ring-2 ring-rose-500/30"
-                : "")
-            }
-          >
-            <span className="text-gray-400">Applied leverage:</span>{" "}
-            <b className="text-white">{tier.pct}%</b>
-          </span>
-        </div>
+      {session && summary && (
+        <div className="rounded-2xl border border-white/10 bg-neutral-950 p-4">
+          <div className="mb-2 flex flex-wrap items-center justify-between gap-2">
+            <div className="text-sm text-gray-300">
+              Session: <b className="text-white">{summary.side}</b>
+            </div>
+            <div className="shrink-0 text-xs text-white/60">
+              Amount: {formatMoney(summary.amountUSDT)} USDT
+            </div>
+          </div>
+          <div className="mb-2 text-xs text-white/60">
+            Asset: {summary.asset}
+            {" · "}
+            Quantity: {summary.tierLabel} ({Math.round(summary.tierPct * 100)}%)
+          </div>
 
-        <div className="relative">
-          <select
-            value={tierId}
-            onChange={(e) => setTierId(e.target.value)}
-            className="w-full appearance-none p-3 pr-10 rounded-xl bg-neutral-900 border border-neutral-800 text-white focus:outline-none focus:ring-2 focus:ring-blue-500/30"
+          <MiniLineChart points={session.points} side={session.side} />
+
+          <div className="mt-3 flex flex-wrap items-center justify-between gap-2 text-sm">
+            <span className="text-gray-300">Live Profit</span>
+            <span className={`shrink-0 font-bold ${summary.profitClass}`}>
+              {summary.currentProfitUSDT >= 0 ? "+" : ""}
+              {formatMoney(summary.currentProfitUSDT)} USDT
+            </span>
+          </div>
+
+          {sessionPhase === "RUNNING" ? (
+            <div className="mt-1 text-xs text-white/60">
+              Running... {summary.remainingSec}s remaining
+            </div>
+          ) : null}
+        </div>
+      )}
+
+      {sessionPhase === "CLAIMABLE" && session && session.currentProfitUSDT >= 0 ? (
+        <div className="rounded-2xl border border-yellow-400/40 bg-yellow-400/10 p-4">
+          <div className="text-lg font-semibold text-white">Claim your profit</div>
+          <div className="mt-2 text-sm text-white/80">
+            Session finished. Final result:
+            {" "}
+            <b className={session.currentProfitUSDT >= 0 ? "text-emerald-300" : "text-rose-300"}>
+              {session.currentProfitUSDT >= 0 ? "+" : ""}
+              {formatMoney(session.currentProfitUSDT)} USDT
+            </b>
+          </div>
+          <button
+            type="button"
+            onClick={claimProfit}
+            disabled={claimLoading}
+            className="mt-3 w-full rounded-xl bg-blue-600 px-4 py-3 font-semibold text-white disabled:opacity-60"
           >
-            {TIERS.map((t) => (
-              <option key={t.id} value={t.id}>
-                {t.label} ({t.pct}%)
-              </option>
+            {claimLoading ? "Claiming..." : "Claim Profit"}
+          </button>
+        </div>
+      ) : null}
+
+      {!!actionErr && (
+        <div className="rounded-xl border border-red-400/30 bg-red-400/10 p-3 text-sm text-red-200">
+          {actionErr}
+        </div>
+      )}
+
+      {!!settlementInfo && (
+        <div className="rounded-xl border border-emerald-400/30 bg-emerald-400/10 p-3 text-sm text-emerald-200">
+          {settlementInfo}
+        </div>
+      )}
+
+      <div className="rounded-2xl border border-white/10 bg-black p-3">
+        <div className="mb-3 text-sm font-semibold text-white">Order History</div>
+        {history.length === 0 ? (
+          <div className="rounded-xl border border-white/10 bg-neutral-900 p-3 text-sm text-white/60">
+            No trade history yet.
+          </div>
+        ) : (
+          <div className="max-h-64 space-y-2 overflow-auto">
+            {history.map((h) => (
+              <div
+                key={h.id}
+                className="rounded-xl border border-white/10 bg-neutral-900 px-3 py-2 text-xs"
+              >
+                <div className="flex flex-wrap items-center justify-between gap-1 text-white/90">
+                  <span className="min-w-0 break-words pr-2">
+                    {h.side} · {h.asset ?? "BTC"} · {formatMoney(h.amountUSDT)} USDT
+                  </span>
+                  <span
+                    className={`shrink-0 ${h.profitUSDT >= 0 ? "text-emerald-300" : "text-rose-300"}`}
+                  >
+                    {h.profitUSDT >= 0 ? "+" : ""}
+                    {formatMoney(h.profitUSDT)} USDT
+                  </span>
+                </div>
+                <div className="mt-1 text-white/50">
+                  Settled at {new Date(h.claimedAt).toLocaleString()}
+                </div>
+              </div>
             ))}
-          </select>
+          </div>
+        )}
+      </div>
 
-          {/* chevron */}
-          <svg
-            aria-hidden="true"
-            viewBox="0 0 24 24"
-            className="pointer-events-none absolute right-3 top-1/2 -translate-y-1/2 h-5 w-5 text-gray-400"
-            fill="none"
-          >
-            <path
-              d="M6 9l6 6 6-6"
-              stroke="currentColor"
-              strokeWidth="2"
-              strokeLinecap="round"
-              strokeLinejoin="round"
-            />
-          </svg>
+      {sessionPhase === "ANALYZING" ? (
+        <div className="fixed inset-0 z-50 grid place-items-center bg-black/70 backdrop-blur-sm">
+          <div className="w-[92%] max-w-md rounded-2xl border border-white/15 bg-[#0b0b0f] p-5 shadow-[0_20px_70px_rgba(0,0,0,.65)]">
+            <div className="text-sm text-white/60">AI Trade Session</div>
+            <div
+              className={[
+                "mt-3 text-lg font-semibold text-white transition-opacity duration-400",
+                analysisVisible ? "opacity-100" : "opacity-10",
+              ].join(" ")}
+            >
+              {ANALYSIS_TEXTS[analysisIdx]}
+            </div>
+            <div className="mt-4 h-1.5 overflow-hidden rounded-full bg-white/10">
+              <div className="h-full w-full animate-pulse bg-blue-500/80" />
+            </div>
+          </div>
         </div>
-      </div>
-
-      <div className="space-y-2">
-        <span className="text-sm text-gray-300">Fill Price (MVP manual)</span>
-        <input
-          value={price}
-          onChange={(e) => setPrice(e.target.value)}
-          inputMode="decimal"
-          className="w-full p-3 rounded-xl bg-neutral-900 border border-neutral-800 text-white placeholder:text-gray-500 focus:outline-none focus:ring-2 focus:ring-blue-500/30"
-          placeholder="100"
-        />
-      </div>
-
-      <button
-        onClick={() => place(side, 1, Number(price))}
-        className="w-full py-3 rounded-xl bg-blue-600 font-bold text-white transition hover:bg-blue-500 active:scale-[0.99] shadow-[0_16px_45px_rgba(37,99,235,.25)]"
-      >
-        Place Order
-      </button>
-
-      {/* C: Show PnL summary above tabs/orders */}
-      <div className="flex items-center justify-between text-sm">
-        <span className="text-gray-300">PnL</span>
-        <span className={
-          "font-bold tabular-nums " +
-          pnlColor +
-          (pnlFlash === "up" ? " animate-pulse" : pnlFlash === "down" ? " animate-pulse" : "")
-        }>
-          {pnl >= 0 ? "+" : ""}{pnl.toFixed(2)}
-        </span>
-      </div>
-
-      <TradeOrders orders={orders} pnl={pnl} />
+      ) : null}
     </div>
   );
 }

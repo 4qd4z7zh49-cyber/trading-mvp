@@ -8,19 +8,24 @@ export default function TradeTabs({
   tab: 'chart' | 'trade';
   setTab: (v: 'chart' | 'trade') => void;
 }) {
+  const tabs: Array<{ key: 'trade' | 'chart'; label: string }> = [
+    { key: 'trade', label: 'AI Trade' },
+    { key: 'chart', label: 'Chart' },
+  ];
+
   return (
     <div className="flex gap-2 mb-3">
-      {['chart', 'trade'].map((t) => (
+      {tabs.map((t) => (
         <button
-          key={t}
-          onClick={() => setTab(t as any)}
+          key={t.key}
+          onClick={() => setTab(t.key)}
           className={`flex-1 py-3 rounded-full font-bold ${
-            tab === t
+            tab === t.key
               ? 'bg-slate-700 text-white'
               : 'bg-black border border-neutral-800 text-gray-400'
           }`}
         >
-          {t === 'chart' ? 'Chart' : 'Trade'}
+          {t.label}
         </button>
       ))}
     </div>

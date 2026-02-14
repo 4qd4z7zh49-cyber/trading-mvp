@@ -4,9 +4,15 @@ import React, { useEffect, useRef, useState } from 'react';
 import Link from 'next/link';
 import Image from 'next/image';
 
+const HERO_HEADLINES = [
+  'AI powered trading platform crafted for your profit',
+  'NEXT-GEN AI trading platform built to boost your profits',
+] as const;
+
 export default function HomeLanding() {
   const logoRef = useRef<HTMLImageElement | null>(null);
   const [year, setYear] = useState<string>('');
+  const [headlineIndex, setHeadlineIndex] = useState(0);
 
   useEffect(() => {
     // Avoid SSR/client hydration mismatch by computing time-based values on the client.
@@ -20,6 +26,13 @@ export default function HomeLanding() {
     };
     window.addEventListener('scroll', onScroll, { passive: true });
     return () => window.removeEventListener('scroll', onScroll);
+  }, []);
+
+  useEffect(() => {
+    const t = window.setInterval(() => {
+      setHeadlineIndex((prev) => (prev + 1) % HERO_HEADLINES.length);
+    }, 4200);
+    return () => window.clearInterval(t);
   }, []);
 
   return (
@@ -101,7 +114,7 @@ export default function HomeLanding() {
         }
         @media (prefers-reduced-motion: reduce){
           .heroLogo{ animation: none; }
-          .hTitle,.hSub,.heroGlow,.heroLine,.swipeItem{ animation: none !important; opacity: 1 !important; transform: none !important; filter: none !important; }
+          .hTitle,.hSub,.heroGlow,.heroLine,.swipeItem,.hChar,.hFxLayer{ animation: none !important; opacity: 1 !important; transform: none !important; filter: none !important; transition: none !important; }
         }
 
         /* keep all content above the heroLogo */
@@ -124,19 +137,71 @@ export default function HomeLanding() {
         .hTitle{
           opacity:0;
           transform: translateY(10px);
-          animation: heroIn .85s cubic-bezier(.2,.8,.2,1) forwards;
+          animation:
+            heroIn .85s cubic-bezier(.2,.8,.2,1) forwards,
+            titleFloat 6s ease-in-out 1s infinite;
           text-shadow: 0 18px 80px rgba(0,0,0,.65);
           font-size: clamp(40px, 6.6vw, 88px);
-          line-height: 1.06;
+          line-height: 1.12;
           letter-spacing: -0.9px;
           margin: 0 auto;
           width: 100%;
-          max-width: 24ch;
+          max-width: 23ch;
           padding: 0 10px;
+        }
+        .hFx{
+          display:inline-flex;
+          flex-wrap:wrap;
+          justify-content:center;
+          align-items:baseline;
+          row-gap:.14em;
+          max-width:100%;
+        }
+        .hFxWrap{
+          display:grid;
+          place-items:center;
+          width:100%;
+        }
+        .hFxLayer{
+          grid-area: 1 / 1;
+          position:relative;
+          width:100%;
+          display:flex;
+          align-items:center;
+          justify-content:center;
+          transition: opacity .7s ease, transform .7s ease, filter .7s ease, visibility .7s ease;
+        }
+        .hFxLayer.isActive{
+          opacity:1;
+          transform: translateY(0);
+          filter: blur(0);
+          visibility: visible;
+        }
+        .hFxLayer.isInactive{
+          opacity:0;
+          transform: translateY(8px);
+          filter: blur(2px);
+          visibility: hidden;
+          pointer-events:none;
+        }
+        .hWord{
+          display:inline-flex;
+          white-space:nowrap;
+          margin-right:.28em;
+        }
+        .hWord:last-child{
+          margin-right:0;
+        }
+        .hChar{
+          display:inline-block;
+          color: rgba(235,243,255,.84);
+          text-shadow: 0 0 0 rgba(0,0,0,0);
+          animation: letterSweep 3.6s ease-in-out infinite;
+          will-change: color, text-shadow, transform;
         }
         .hSub{
           color:#a9b3c2;
-          margin:0 auto;
+          margin:12px auto 0;
           max-width:72ch;
           line-height:1.6;
           font-size: clamp(14px, 2.2vw, 18px);
@@ -171,6 +236,31 @@ export default function HomeLanding() {
         @keyframes heroIn{
           from { opacity:0; transform: translateY(10px); filter: blur(4px); }
           to   { opacity:1; transform: translateY(0);   filter: blur(0); }
+        }
+        @keyframes titleFloat{
+          0%,100% { transform: translateY(0); }
+          50%     { transform: translateY(-3px); }
+        }
+        @keyframes letterSweep{
+          0%, 78%, 100% {
+            color: rgba(235,243,255,.84);
+            text-shadow: 0 0 0 rgba(0,0,0,0);
+            transform: translateY(0);
+          }
+          88% {
+            color: #ffffff;
+            text-shadow:
+              0 0 18px rgba(34,211,238,.55),
+              0 0 38px rgba(59,130,246,.40);
+            transform: translateY(-1px);
+          }
+          94% {
+            color: #f8fbff;
+            text-shadow:
+              0 0 10px rgba(34,211,238,.35),
+              0 0 26px rgba(59,130,246,.24);
+            transform: translateY(0);
+          }
         }
         @keyframes glowPulse{
           0%,100% { opacity:.65; transform: translateX(-50%) scale(1); }
@@ -283,7 +373,7 @@ export default function HomeLanding() {
           ref={logoRef}
           className="heroLogo"
           src="/openbook.png"
-          alt="OPENBOOK"
+          alt="OPENBOOKPRO"
         />
         <div className="layer">
         <div className="topbar">
@@ -291,13 +381,13 @@ export default function HomeLanding() {
             <div className="brand">
               <Image
                 src="/openbook.png"
-                alt="OPENBOOK logo"
+                alt="OPENBOOKPRO logo"
                 width={34}
                 height={34}
                 style={{ borderRadius: 8 }}
                 priority
               />
-              <div className="name">OPENBOOK</div>
+              <div className="name">OPENBOOKPRO</div>
             </div>
             <div className="spacer" />
             <Link className="cta" href="/login">
@@ -312,7 +402,33 @@ export default function HomeLanding() {
         <div className="container">
           <div className="hero">
             <div className="heroGlow" />
-            <h1 className="hTitle">Trade with your trusted partner within 5 minutes.</h1>
+            <h1 className="hTitle" aria-label={HERO_HEADLINES[headlineIndex]}>
+              <span className="hFxWrap">
+                {HERO_HEADLINES.map((headline, phraseIdx) => (
+                  <span
+                    key={headline}
+                    className={`hFxLayer ${phraseIdx === headlineIndex ? 'isActive' : 'isInactive'}`}
+                    aria-hidden={phraseIdx !== headlineIndex}
+                  >
+                    <span className="hFx">
+                      {headline.split(' ').map((word, wordIdx) => (
+                        <span key={`${phraseIdx}-${wordIdx}-${word}`} className="hWord">
+                          {word.split('').map((ch, charIdx) => (
+                            <span
+                              key={`${phraseIdx}-${wordIdx}-${charIdx}-${ch}`}
+                              className="hChar"
+                              style={{ animationDelay: `${(wordIdx * 0.12 + charIdx * 0.035).toFixed(3)}s` }}
+                            >
+                              {ch}
+                            </span>
+                          ))}
+                        </span>
+                      ))}
+                    </span>
+                  </span>
+                ))}
+              </span>
+            </h1>
             <p className="hSub">Trade safely with real market data.</p>
             <div className="heroLine" />
 
@@ -355,10 +471,6 @@ export default function HomeLanding() {
               </div>
 
               <div style={{ height: 14 }} />
-              <div className="fTitle">Customer Service</div>
-              <div className="muted">support@tradingmvp.app</div>
-
-              <div style={{ height: 14 }} />
               <div className="logos">
                 <span className="pill">Mastercard</span>
                 <span className="pill">VISA</span>
@@ -373,8 +485,10 @@ export default function HomeLanding() {
                 <summary>Risk Warning</summary>
                 <div style={{ height: 10 }} />
                 <div className="small">
-                  This is a paper-trading demo. No real trading is executed. Leveraged products can carry a high level of
-                  risk and may not be suitable for all users.
+                  Trading digital assets involves a high level of risk and may result in partial or total loss of capital.
+                  Prices can be extremely volatile and may move rapidly due to market liquidity, leverage, news flow, and
+                  macroeconomic events. You should only trade with funds you can afford to lose and carefully assess whether
+                  these products are appropriate for your financial situation and risk tolerance.
                 </div>
               </details>
 
@@ -383,21 +497,16 @@ export default function HomeLanding() {
                 <summary>General Disclaimer</summary>
                 <div style={{ height: 10 }} />
                 <div className="small">
-                  The content on this website is provided for informational purposes only and does not take into account
-                  your objectives or circumstances.
+                  OPENBOOKPRO provides market information and platform tools for general informational purposes only. Nothing
+                  on this website constitutes investment, legal, tax, or accounting advice, and no content should be
+                  interpreted as a recommendation, offer, or solicitation to buy or sell any financial instrument. Past
+                  performance is not a reliable indicator of future results.
                 </div>
-              </details>
-
-              <div style={{ height: 12 }} />
-              <details>
-                <summary>Regulatory Information</summary>
-                <div style={{ height: 10 }} />
-                <div className="small">Demo project. Add real regulatory details only if you operate a licensed service.</div>
               </details>
 
               <div style={{ height: 16 }} />
               <div className="muted" style={{ textAlign: 'center' }}>
-                © {year} OPENBOOK. All rights reserved.
+                © {year} OPENBOOKPRO. All rights reserved.
               </div>
             </div>
           </div>

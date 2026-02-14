@@ -2,10 +2,11 @@
 
 import Link from "next/link";
 import { useEffect, useMemo, useState } from "react";
+import type { CSSProperties, FormEvent } from "react";
 import { useRouter } from "next/navigation";
 import { parsePhoneNumberFromString } from "libphonenumber-js";
 import { buildCountryOptions } from "../_lib/countries";
-import { supabase } from "../../../lib/supabaseClient";
+import { supabase } from "@/lib/supabaseClient";
 
 export default function SignupPage() {
   const router = useRouter();
@@ -32,6 +33,7 @@ export default function SignupPage() {
   const [pw, setPw] = useState<string>("");
   const [pw2, setPw2] = useState<string>("");
   const [username, setUsername] = useState<string>("");
+  const [invitationCode, setInvitationCode] = useState<string>("");
   const [showPw, setShowPw] = useState(false);
   const [showPw2, setShowPw2] = useState(false);
   const [loading, setLoading] = useState(false);
@@ -53,7 +55,7 @@ export default function SignupPage() {
 
   const pwMatch = pw.length > 0 && pw === pw2;
 
-  async function handleSignup(e?: React.FormEvent) {
+async function handleSignup(e?: FormEvent) {
     e?.preventDefault();
     setError("");
 
@@ -65,6 +67,30 @@ export default function SignupPage() {
 
     try {
       setLoading(true);
+      const code = invitationCode.trim();
+      let subAdminId: string | null = null;
+
+      // Validate invitation code only if provided
+      if (code) {
+        const validateRes = await fetch("/api/invite", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ invitationCode: code }),
+        });
+
+        const validateJson = await validateRes.json().catch(() => ({} as any));
+
+        if (!validateRes.ok) {
+          setError(validateJson?.error || "Invalid invitation code.");
+          return;
+        }
+
+        subAdminId = validateJson?.subAdminId ?? null;
+        if (!subAdminId) {
+          setError("Invalid invitation code.");
+          return;
+        }
+      }
 
       const { error: signUpError } = await supabase.auth.signUp({
         email: email.trim(),
@@ -77,6 +103,8 @@ export default function SignupPage() {
             country,
             dial,
             phone: fullPhone,
+            invitation_code: code || null,
+            managed_by: subAdminId,
           },
         },
       });
@@ -131,6 +159,15 @@ export default function SignupPage() {
               value={username}
               onChange={(e) => setUsername(e.target.value)}
               autoComplete="username"
+            />
+
+            <label style={styles.label}>Invitation code</label>
+            <input
+              style={styles.input}
+              placeholder="Enter invitation code"
+              value={invitationCode}
+              onChange={(e) => setInvitationCode(e.target.value)}
+              autoComplete="one-time-code"
             />
 
             <label style={styles.label}>Phone number</label>
@@ -269,7 +306,7 @@ export default function SignupPage() {
   );
 }
 
-const styles: Record<string, React.CSSProperties> = {
+const styles: Record<string, CSSProperties> = {
   page: {
     minHeight: "100dvh",
     display: "grid",

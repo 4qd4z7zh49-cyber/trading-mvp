@@ -259,9 +259,17 @@ export default function MarketsPage() {
   const sortDisabled = category !== "crypto";
 
   return (
-    <div style={{ padding: 16 }}>
+    <div style={{ padding: 16, maxWidth: 980, margin: "0 auto" }}>
       {/* Header */}
-      <div style={{ display: "flex", alignItems: "baseline", justifyContent: "space-between" }}>
+      <div
+        style={{
+          display: "flex",
+          alignItems: "baseline",
+          justifyContent: "space-between",
+          flexWrap: "wrap",
+          gap: 10,
+        }}
+      >
         <div>
           <div style={{ fontSize: 26, fontWeight: 800, letterSpacing: "-0.02em" }}>
             Markets
@@ -275,13 +283,15 @@ export default function MarketsPage() {
       </div>
 
       {/* Search + Sort (crypto only) */}
-      <div style={{ marginTop: 14, display: "grid", gridTemplateColumns: "1fr auto", gap: 10 }}>
+      <div style={{ marginTop: 14, display: "flex", flexWrap: "wrap", gap: 10 }}>
         <input
           value={q}
           onChange={(e) => setQ(e.target.value)}
           placeholder={category === "crypto" ? "Search BTC, ETH, SOL…" : "Search disabled here"}
           disabled={sortDisabled}
           style={{
+            flex: "1 1 220px",
+            minWidth: 0,
             height: 48,
             borderRadius: 16,
             border: "1px solid rgba(255,255,255,.10)",
@@ -298,6 +308,8 @@ export default function MarketsPage() {
           onChange={(e) => setSortKey(e.target.value as SortKey)}
           disabled={sortDisabled}
           style={{
+            flex: "1 1 180px",
+            minWidth: 0,
             height: 48,
             borderRadius: 16,
             border: "1px solid rgba(255,255,255,.10)",

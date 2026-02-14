@@ -1,11 +1,18 @@
-import { supabase } from '@/lib/supabaseClient';
+// lib/auth.ts
+import { supabase } from "@/lib/supabaseClient";
 
 export const signUp = async (email: string, password: string) => {
-  return supabase.auth.signUp({ email, password });
+  return supabase.auth.signUp({
+    email,
+    password,
+  });
 };
 
 export const signIn = async (email: string, password: string) => {
-  return supabase.auth.signInWithPassword({ email, password });
+  return supabase.auth.signInWithPassword({
+    email,
+    password,
+  });
 };
 
 export const signOut = async () => {

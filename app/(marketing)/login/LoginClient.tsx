@@ -41,7 +41,7 @@ export default function LoginClient() {
         return;
       }
 
-      router.push("/trade");
+      router.replace("/home");
     } catch (err: any) {
       setError(err?.message || "Login failed.");
     } finally {
