@@ -14,37 +14,69 @@ function getSupabaseAdminClient() {
   return createClient(url, key);
 }
 
+function normalizeInvitationCode(value: unknown) {
+  return String(value || "")
+    .trim()
+    .replace(/[\s-]+/g, "")
+    .toUpperCase();
+}
+
+function isSubAdminRole(role: unknown) {
+  const r = String(role || "")
+    .trim()
+    .toLowerCase();
+  return r === "sub-admin" || r === "subadmin";
+}
+
 export async function POST(req: Request) {
   try {
     const supabase = getSupabaseAdminClient();
     const { invitationCode } = await req.json();
-    const code = String(invitationCode || "").trim();
+    const code = normalizeInvitationCode(invitationCode);
 
     if (!code) {
       return NextResponse.json({ error: "Invitation code required" }, { status: 400 });
     }
 
-    // ✅ admins table မှာ invitation_code စစ်
-    const { data, error } = await supabase
+    // 1) Case-insensitive exact check
+    const { data: exactData, error: exactErr } = await supabase
       .from("admins")
-      .select("id, role") // ✅ user_id မဟုတ်ဘဲ id
-      .eq("invitation_code", code)
+      .select("id, role, invitation_code")
+      .ilike("invitation_code", code)
       .single();
 
-    if (error || !data) {
+    let row = exactData;
+
+    // 2) Fallback: ignore spaces / hyphens in stored code
+    if (exactErr || !row) {
+      const { data: rows, error: rowsErr } = await supabase
+        .from("admins")
+        .select("id, role, invitation_code")
+        .not("invitation_code", "is", null)
+        .limit(3000);
+
+      if (!rowsErr && Array.isArray(rows)) {
+        row =
+          rows.find(
+            (r) => normalizeInvitationCode(r.invitation_code) === code
+          ) ?? null;
+      }
+    }
+
+    if (!row) {
       return NextResponse.json({ error: "Invalid invitation code" }, { status: 400 });
     }
 
-    const role = String(data.role || "").trim();
-    if (role !== "sub-admin" && role !== "subadmin") {
+    if (!isSubAdminRole(row.role)) {
       return NextResponse.json({ error: "Invitation code is not for sub-admin" }, { status: 400 });
     }
 
     return NextResponse.json({
       success: true,
-      subAdminId: data.id, // ✅ return id
+      subAdminId: row.id,
     });
-  } catch (e: any) {
-    return NextResponse.json({ error: e?.message ?? "Server error" }, { status: 500 });
+  } catch (e: unknown) {
+    const message = e instanceof Error ? e.message : "Server error";
+    return NextResponse.json({ error: message }, { status: 500 });
   }
 }

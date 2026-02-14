@@ -17,6 +17,7 @@ export default function AdminSidebar() {
   const [pendingDepositCount, setPendingDepositCount] = useState(0);
   const [pendingWithdrawCount, setPendingWithdrawCount] = useState(0);
   const [pendingNotifyCount, setPendingNotifyCount] = useState(0);
+  const [pendingSupportCount, setPendingSupportCount] = useState(0);
 
   const goTab = (t: string) => router.push(`/admin?tab=${t}`);
   const goManageAdmin = () => router.push("/admin/manage-admin");
@@ -47,7 +48,7 @@ export default function AdminSidebar() {
 
     const run = async () => {
       try {
-        const [depRes, wdRes, notifyRes] = await Promise.all([
+        const [depRes, wdRes, notifyRes, supportRes] = await Promise.all([
           fetch("/api/admin/deposit-requests?status=PENDING&limit=1", {
             cache: "no-store",
             credentials: "include",
@@ -60,16 +61,22 @@ export default function AdminSidebar() {
             cache: "no-store",
             credentials: "include",
           }),
+          fetch("/api/admin/support?mode=badge", {
+            cache: "no-store",
+            credentials: "include",
+          }),
         ]);
 
         const depJson = (await depRes.json().catch(() => ({}))) as DepositRequestBadgeResponse;
         const wdJson = (await wdRes.json().catch(() => ({}))) as DepositRequestBadgeResponse;
         const notifyJson = (await notifyRes.json().catch(() => ({}))) as DepositRequestBadgeResponse;
+        const supportJson = (await supportRes.json().catch(() => ({}))) as DepositRequestBadgeResponse;
 
         if (!cancelled) {
           if (depRes.ok && depJson?.ok) setPendingDepositCount(Number(depJson.pendingCount ?? 0));
           if (wdRes.ok && wdJson?.ok) setPendingWithdrawCount(Number(wdJson.pendingCount ?? 0));
           if (notifyRes.ok && notifyJson?.ok) setPendingNotifyCount(Number(notifyJson.pendingCount ?? 0));
+          if (supportRes.ok && supportJson?.ok) setPendingSupportCount(Number(supportJson.pendingCount ?? 0));
         }
       } catch {
         // ignore badge polling errors
@@ -116,6 +123,7 @@ export default function AdminSidebar() {
       {item("Orders", tab === "orders", () => goTab("orders"))}
       {item("Withdraw", tab === "withdraw", () => goTab("withdraw"), pendingWithdrawCount)}
       {item("Notify", tab === "notify", () => goTab("notify"), pendingNotifyCount)}
+      {item("Support", tab === "support", () => goTab("support"), pendingSupportCount)}
 
       <div className="mt-2 border-t border-white/10 pt-3">
         {item("Manage Admin", false, goManageAdmin)}

@@ -6,6 +6,7 @@ import { useSearchParams } from "next/navigation";
 import MiningPendingTable from "@/app/admin/components/MiningPendingTable";
 import WithdrawRequestsPanel from "@/app/admin/components/WithdrawRequestsPanel";
 import NotifyPanel from "@/app/admin/components/NotifyPanel";
+import SupportChatPanel from "@/app/admin/components/SupportChatPanel";
 
 type Asset = "USDT" | "BTC" | "ETH" | "SOL" | "XRP";
 type TopupMode = "ADD" | "SUBTRACT";
@@ -501,7 +502,9 @@ export default function SubAdminPage() {
                     ? "Orders"
                     : tab === "withdraw"
                       ? "Withdraw"
-                      : "Notify"}
+                      : tab === "notify"
+                        ? "Notify"
+                        : "Support"}
           </div>
           <div className="mt-1 text-sm text-white/60">Sub-admin dashboard (managed users only)</div>
         </div>
@@ -996,6 +999,8 @@ export default function SubAdminPage() {
       {tab === "withdraw" && <WithdrawRequestsPanel />}
 
       {tab === "notify" && <NotifyPanel />}
+
+      {tab === "support" && <SupportChatPanel />}
     </div>
   );
 }

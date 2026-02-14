@@ -81,7 +81,7 @@ const items: Item[] = [
   },
   {
     title: "Support",
-    href: "/settings",
+    href: "/support",
     icon: () => (
       <svg viewBox="0 0 24 24" width="22" height="22" fill="none">
         <path

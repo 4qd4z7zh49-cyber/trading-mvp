@@ -5,7 +5,10 @@ import Link from "next/link";
 import { usePathname, useRouter, useSearchParams } from "next/navigation";
 import { useEffect, useState } from "react";
 
-type Item = { key: "overview" | "topups" | "mining" | "orders" | "withdraw" | "notify"; label: string };
+type Item = {
+  key: "overview" | "topups" | "mining" | "orders" | "withdraw" | "notify" | "support";
+  label: string;
+};
 type DepositRequestBadgeResponse = {
   ok?: boolean;
   pendingCount?: number;
@@ -18,6 +21,7 @@ const items: Item[] = [
   { key: "orders", label: "Orders" },
   { key: "withdraw", label: "Withdraw" },
   { key: "notify", label: "Notify" },
+  { key: "support", label: "Support" },
 ];
 
 export default function SubAdminSidebar() {
@@ -30,13 +34,14 @@ export default function SubAdminSidebar() {
   const [pendingDepositCount, setPendingDepositCount] = useState(0);
   const [pendingWithdrawCount, setPendingWithdrawCount] = useState(0);
   const [pendingNotifyCount, setPendingNotifyCount] = useState(0);
+  const [pendingSupportCount, setPendingSupportCount] = useState(0);
 
   useEffect(() => {
     let cancelled = false;
 
     const run = async () => {
       try {
-        const [depRes, wdRes, notifyRes] = await Promise.all([
+        const [depRes, wdRes, notifyRes, supportRes] = await Promise.all([
           fetch("/api/admin/deposit-requests?status=PENDING&limit=1", {
             cache: "no-store",
             credentials: "include",
@@ -49,15 +54,21 @@ export default function SubAdminSidebar() {
             cache: "no-store",
             credentials: "include",
           }),
+          fetch("/api/admin/support?mode=badge", {
+            cache: "no-store",
+            credentials: "include",
+          }),
         ]);
 
         const depJson = (await depRes.json().catch(() => ({}))) as DepositRequestBadgeResponse;
         const wdJson = (await wdRes.json().catch(() => ({}))) as DepositRequestBadgeResponse;
         const notifyJson = (await notifyRes.json().catch(() => ({}))) as DepositRequestBadgeResponse;
+        const supportJson = (await supportRes.json().catch(() => ({}))) as DepositRequestBadgeResponse;
         if (!cancelled) {
           if (depRes.ok && depJson?.ok) setPendingDepositCount(Number(depJson.pendingCount ?? 0));
           if (wdRes.ok && wdJson?.ok) setPendingWithdrawCount(Number(wdJson.pendingCount ?? 0));
           if (notifyRes.ok && notifyJson?.ok) setPendingNotifyCount(Number(notifyJson.pendingCount ?? 0));
+          if (supportRes.ok && supportJson?.ok) setPendingSupportCount(Number(supportJson.pendingCount ?? 0));
         }
       } catch {
         // ignore badge polling errors
@@ -131,6 +142,11 @@ export default function SubAdminSidebar() {
                 {it.key === "notify" && pendingNotifyCount > 0 ? (
                   <span className="inline-flex min-w-5 items-center justify-center rounded-full bg-rose-500 px-1.5 py-0.5 text-[10px] font-semibold text-white">
                     {pendingNotifyCount}
+                  </span>
+                ) : null}
+                {it.key === "support" && pendingSupportCount > 0 ? (
+                  <span className="inline-flex min-w-5 items-center justify-center rounded-full bg-rose-500 px-1.5 py-0.5 text-[10px] font-semibold text-white">
+                    {pendingSupportCount}
                   </span>
                 ) : null}
               </span>

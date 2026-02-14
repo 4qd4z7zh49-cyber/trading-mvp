@@ -8,6 +8,11 @@ import { parsePhoneNumberFromString } from "libphonenumber-js";
 import { buildCountryOptions } from "../_lib/countries";
 import { supabase } from "@/lib/supabaseClient";
 
+type InviteValidateResponse = {
+  error?: string;
+  subAdminId?: string | null;
+};
+
 export default function SignupPage() {
   const router = useRouter();
 
@@ -55,6 +60,9 @@ export default function SignupPage() {
 
   const pwMatch = pw.length > 0 && pw === pw2;
 
+  const normalizeInvitationCode = (value: string) =>
+    value.trim().replace(/[\s-]+/g, "").toUpperCase();
+
 async function handleSignup(e?: FormEvent) {
     e?.preventDefault();
     setError("");
@@ -67,7 +75,7 @@ async function handleSignup(e?: FormEvent) {
 
     try {
       setLoading(true);
-      const code = invitationCode.trim();
+      const code = normalizeInvitationCode(invitationCode);
       let subAdminId: string | null = null;
 
       // Validate invitation code only if provided
@@ -78,7 +86,9 @@ async function handleSignup(e?: FormEvent) {
           body: JSON.stringify({ invitationCode: code }),
         });
 
-        const validateJson = await validateRes.json().catch(() => ({} as any));
+        const validateJson = (await validateRes
+          .json()
+          .catch(() => ({}))) as InviteValidateResponse;
 
         if (!validateRes.ok) {
           setError(validateJson?.error || "Invalid invitation code.");
@@ -116,8 +126,9 @@ async function handleSignup(e?: FormEvent) {
 
       // Send user back to login (or you can route to /trade later after email confirmation)
       router.push("/login?created=1");
-    } catch (err: any) {
-      setError(err?.message || "Something went wrong.");
+    } catch (err: unknown) {
+      const message = err instanceof Error ? err.message : "Something went wrong.";
+      setError(message);
     } finally {
       setLoading(false);
     }
@@ -166,7 +177,7 @@ async function handleSignup(e?: FormEvent) {
               style={styles.input}
               placeholder="Enter invitation code"
               value={invitationCode}
-              onChange={(e) => setInvitationCode(e.target.value)}
+              onChange={(e) => setInvitationCode(normalizeInvitationCode(e.target.value))}
               autoComplete="one-time-code"
             />
 

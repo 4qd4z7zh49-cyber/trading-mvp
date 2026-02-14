@@ -5,6 +5,7 @@ import { useSearchParams } from "next/navigation";
 import MiningPendingTable from "../components/MiningPendingTable";
 import WithdrawRequestsPanel from "../components/WithdrawRequestsPanel";
 import NotifyPanel from "../components/NotifyPanel";
+import SupportChatPanel from "../components/SupportChatPanel";
 
 type Asset = "USDT" | "BTC" | "ETH" | "SOL" | "XRP";
 type TopupMode = "ADD" | "SUBTRACT";
@@ -1195,6 +1196,10 @@ export default function AdminPage() {
 
   if (tab === "notify") {
     return <NotifyPanel />;
+  }
+
+  if (tab === "support") {
+    return <SupportChatPanel />;
   }
 
   return (
