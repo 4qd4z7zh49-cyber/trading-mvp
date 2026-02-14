@@ -5,12 +5,28 @@ import { getUserAccessForUsers } from "@/lib/userAccessStore";
 
 export const dynamic = "force-dynamic";
 
-const supabase = createClient(
-  process.env.NEXT_PUBLIC_SUPABASE_URL!,
-  process.env.SUPABASE_SERVICE_ROLE_KEY!
-);
+function getSupabaseAdminClient() {
+  const url = process.env.SUPABASE_URL || process.env.NEXT_PUBLIC_SUPABASE_URL;
+  const key = process.env.SUPABASE_SERVICE_ROLE_KEY;
+
+  if (!url || !key) {
+    throw new Error(
+      "Missing Supabase env. Set SUPABASE_URL (or NEXT_PUBLIC_SUPABASE_URL) and SUPABASE_SERVICE_ROLE_KEY."
+    );
+  }
+
+  return createClient(url, key);
+}
 
 export async function GET(req: Request) {
+  let supabase: ReturnType<typeof getSupabaseAdminClient>;
+  try {
+    supabase = getSupabaseAdminClient();
+  } catch (error) {
+    const message = error instanceof Error ? error.message : "Supabase configuration missing";
+    return NextResponse.json({ error: message }, { status: 500 });
+  }
+
   const cookie = req.headers.get("cookie") || "";
 
   const getCookie = (name: string) => {
