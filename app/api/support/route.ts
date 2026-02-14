@@ -29,11 +29,14 @@ type MessageRow = {
   sender_user_id: string | null;
   sender_admin_id: string | null;
   message: string | null;
+  message_type: string | null;
+  image_url: string | null;
   created_at: string | null;
 };
 
 type SupportBody = {
   message?: string;
+  imageDataUrl?: string;
 };
 
 function normalizeThreadStatus(value: unknown): ThreadStatus {
@@ -57,6 +60,8 @@ function mapMessage(row: MessageRow) {
     senderUserId: row.sender_user_id ? String(row.sender_user_id) : null,
     senderAdminId: row.sender_admin_id ? String(row.sender_admin_id) : null,
     message: String(row.message || ""),
+    messageType: String(row.message_type || "TEXT").toUpperCase() === "IMAGE" ? "IMAGE" : "TEXT",
+    imageUrl: row.image_url ? String(row.image_url) : null,
     createdAt: String(row.created_at || ""),
   };
 }
@@ -127,7 +132,9 @@ export async function GET(req: Request) {
     const thread = await ensureThread(userId);
     const { data: rows, error } = await svc
       .from("support_messages")
-      .select("id,thread_id,sender_role,sender_user_id,sender_admin_id,message,created_at")
+      .select(
+        "id,thread_id,sender_role,sender_user_id,sender_admin_id,message,message_type,image_url,created_at"
+      )
       .eq("thread_id", thread.id)
       .order("created_at", { ascending: true })
       .limit(400);
@@ -168,15 +175,25 @@ export async function POST(req: Request) {
 
     const body = parseBody(await req.json().catch(() => null));
     const message = String(body.message || "").trim();
-    if (!message) {
-      return NextResponse.json({ error: "Message is required" }, { status: 400 });
+    const imageDataUrl = String(body.imageDataUrl || "").trim();
+    if (!message && !imageDataUrl) {
+      return NextResponse.json({ error: "Message or image is required" }, { status: 400 });
     }
     if (message.length > 4000) {
       return NextResponse.json({ error: "Message is too long (max 4000)" }, { status: 400 });
     }
+    if (imageDataUrl) {
+      if (!imageDataUrl.startsWith("data:image/")) {
+        return NextResponse.json({ error: "Invalid image format" }, { status: 400 });
+      }
+      if (imageDataUrl.length > 5_000_000) {
+        return NextResponse.json({ error: "Image is too large" }, { status: 400 });
+      }
+    }
 
     const thread = await ensureThread(userId);
     const now = new Date().toISOString();
+    const messageType = imageDataUrl ? "IMAGE" : "TEXT";
 
     const { data, error } = await svc
       .from("support_messages")
@@ -185,9 +202,13 @@ export async function POST(req: Request) {
         sender_role: "USER",
         sender_user_id: userId,
         sender_admin_id: null,
-        message,
+        message: message || "",
+        message_type: messageType,
+        image_url: imageDataUrl || null,
       })
-      .select("id,thread_id,sender_role,sender_user_id,sender_admin_id,message,created_at")
+      .select(
+        "id,thread_id,sender_role,sender_user_id,sender_admin_id,message,message_type,image_url,created_at"
+      )
       .maybeSingle<MessageRow>();
     if (error || !data) {
       return NextResponse.json(
@@ -233,4 +254,3 @@ export async function POST(req: Request) {
     return NextResponse.json({ error: message }, { status: 500 });
   }
 }
-

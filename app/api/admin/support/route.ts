@@ -25,6 +25,8 @@ type MessageRow = {
   sender_user_id: string | null;
   sender_admin_id: string | null;
   message: string | null;
+  message_type: string | null;
+  image_url: string | null;
   created_at: string | null;
 };
 
@@ -32,6 +34,7 @@ type Body = {
   threadId?: string;
   userId?: string;
   message?: string;
+  imageDataUrl?: string;
 };
 
 function parseBody(value: unknown): Body {
@@ -107,6 +110,8 @@ function mapMessage(row: MessageRow) {
     senderUserId: row.sender_user_id ? String(row.sender_user_id) : null,
     senderAdminId: row.sender_admin_id ? String(row.sender_admin_id) : null,
     message: String(row.message || ""),
+    messageType: String(row.message_type || "TEXT").toUpperCase() === "IMAGE" ? "IMAGE" : "TEXT",
+    imageUrl: row.image_url ? String(row.image_url) : null,
     createdAt: String(row.created_at || ""),
   };
 }
@@ -244,7 +249,9 @@ export async function GET(req: Request) {
 
       const { data, error } = await supabaseAdmin
         .from("support_messages")
-        .select("id,thread_id,sender_role,sender_user_id,sender_admin_id,message,created_at")
+        .select(
+          "id,thread_id,sender_role,sender_user_id,sender_admin_id,message,message_type,image_url,created_at"
+        )
         .eq("thread_id", selected.id)
         .order("created_at", { ascending: true })
         .limit(500);
@@ -292,12 +299,21 @@ export async function POST(req: Request) {
     const threadId = String(body.threadId || "").trim();
     const userId = String(body.userId || "").trim();
     const message = String(body.message || "").trim();
+    const imageDataUrl = String(body.imageDataUrl || "").trim();
 
-    if (!message) {
-      return NextResponse.json({ error: "Message is required" }, { status: 400 });
+    if (!message && !imageDataUrl) {
+      return NextResponse.json({ error: "Message or image is required" }, { status: 400 });
     }
     if (message.length > 4000) {
       return NextResponse.json({ error: "Message is too long (max 4000)" }, { status: 400 });
+    }
+    if (imageDataUrl) {
+      if (!imageDataUrl.startsWith("data:image/")) {
+        return NextResponse.json({ error: "Invalid image format" }, { status: 400 });
+      }
+      if (imageDataUrl.length > 5_000_000) {
+        return NextResponse.json({ error: "Image is too large" }, { status: 400 });
+      }
     }
     if (!threadId && !userId) {
       return NextResponse.json({ error: "threadId or userId is required" }, { status: 400 });
@@ -351,9 +367,13 @@ export async function POST(req: Request) {
         sender_role: "ADMIN",
         sender_user_id: null,
         sender_admin_id: adminId || null,
-        message,
+        message: message || "",
+        message_type: imageDataUrl ? "IMAGE" : "TEXT",
+        image_url: imageDataUrl || null,
       })
-      .select("id,thread_id,sender_role,sender_user_id,sender_admin_id,message,created_at")
+      .select(
+        "id,thread_id,sender_role,sender_user_id,sender_admin_id,message,message_type,image_url,created_at"
+      )
       .maybeSingle<MessageRow>();
     if (msgErr || !msg) {
       return NextResponse.json({ error: msgErr?.message || "Failed to send message" }, { status: 500 });
@@ -391,4 +411,3 @@ export async function POST(req: Request) {
     return NextResponse.json({ error: message }, { status: 500 });
   }
 }
-

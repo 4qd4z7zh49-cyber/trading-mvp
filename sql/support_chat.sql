@@ -28,9 +28,30 @@ create table if not exists public.support_messages (
   sender_user_id uuid references auth.users(id) on delete set null,
   sender_admin_id uuid references public.admins(id) on delete set null,
   message text not null,
+  message_type text not null default 'TEXT'
+    check (message_type = any (array['TEXT'::text, 'IMAGE'::text])),
+  image_url text,
   created_at timestamptz not null default now()
 );
 
 create index if not exists idx_support_messages_thread_created
   on public.support_messages (thread_id, created_at asc);
 
+alter table if exists public.support_messages
+  add column if not exists message_type text not null default 'TEXT';
+
+alter table if exists public.support_messages
+  add column if not exists image_url text;
+
+do $$
+begin
+  if not exists (
+    select 1
+    from pg_constraint
+    where conname = 'support_messages_message_type_check'
+  ) then
+    alter table public.support_messages
+      add constraint support_messages_message_type_check
+      check (message_type = any (array['TEXT'::text, 'IMAGE'::text]));
+  end if;
+end $$;

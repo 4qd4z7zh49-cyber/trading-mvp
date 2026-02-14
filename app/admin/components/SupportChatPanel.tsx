@@ -4,6 +4,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 
 type ThreadStatus = "OPEN" | "CLOSED";
 type SenderRole = "USER" | "ADMIN";
+type MessageType = "TEXT" | "IMAGE";
 
 type SupportThread = {
   id: string;
@@ -26,6 +27,8 @@ type SupportMessage = {
   senderUserId: string | null;
   senderAdminId: string | null;
   message: string;
+  messageType: MessageType;
+  imageUrl: string | null;
   createdAt: string;
 };
 
@@ -56,7 +59,16 @@ async function readJson<T>(res: Response): Promise<T> {
 function fmtWhen(value: string) {
   const d = new Date(value);
   if (Number.isNaN(d.getTime())) return "-";
-  return d.toLocaleString();
+  return d.toLocaleTimeString();
+}
+
+async function fileToDataUrl(file: File) {
+  return new Promise<string>((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onload = () => resolve(String(reader.result || ""));
+    reader.onerror = () => reject(new Error("Failed to read image"));
+    reader.readAsDataURL(file);
+  });
 }
 
 export default function SupportChatPanel() {
@@ -69,8 +81,10 @@ export default function SupportChatPanel() {
   const [draft, setDraft] = useState("");
   const [sendLoading, setSendLoading] = useState(false);
   const [sendErr, setSendErr] = useState("");
-  const [sendInfo, setSendInfo] = useState("");
+  const [pickedImageDataUrl, setPickedImageDataUrl] = useState("");
+  const [pickedImageName, setPickedImageName] = useState("");
   const bodyRef = useRef<HTMLDivElement | null>(null);
+  const fileRef = useRef<HTMLInputElement | null>(null);
 
   const activeThread = useMemo(
     () => threads.find((row) => row.id === activeThreadId) || null,
@@ -135,8 +149,39 @@ export default function SupportChatPanel() {
   const selectThread = (threadId: string) => {
     setActiveThreadId(threadId);
     setSendErr("");
-    setSendInfo("");
     void loadData(threadId);
+  };
+
+  const onPickPhoto = () => {
+    fileRef.current?.click();
+  };
+
+  const onPhotoChanged = async (file?: File) => {
+    if (!file) return;
+    if (!file.type.startsWith("image/")) {
+      setSendErr("Only image files are allowed");
+      return;
+    }
+    if (file.size > 2 * 1024 * 1024) {
+      setSendErr("Image size must be 2MB or less");
+      return;
+    }
+
+    try {
+      const dataUrl = await fileToDataUrl(file);
+      setPickedImageDataUrl(dataUrl);
+      setPickedImageName(file.name);
+      setSendErr("");
+    } catch (e: unknown) {
+      const message = e instanceof Error ? e.message : "Failed to read image";
+      setSendErr(message);
+    }
+  };
+
+  const clearPhoto = () => {
+    setPickedImageDataUrl("");
+    setPickedImageName("");
+    if (fileRef.current) fileRef.current.value = "";
   };
 
   const onSend = async () => {
@@ -145,8 +190,8 @@ export default function SupportChatPanel() {
       setSendErr("Choose a chat first");
       return;
     }
-    if (!message) {
-      setSendErr("Message is required");
+    if (!message && !pickedImageDataUrl) {
+      setSendErr("Message or photo is required");
       return;
     }
     if (message.length > 4000) {
@@ -156,7 +201,6 @@ export default function SupportChatPanel() {
 
     setSendLoading(true);
     setSendErr("");
-    setSendInfo("");
     try {
       const r = await fetch("/api/admin/support", {
         method: "POST",
@@ -165,6 +209,7 @@ export default function SupportChatPanel() {
         body: JSON.stringify({
           threadId: activeThreadId,
           message,
+          imageDataUrl: pickedImageDataUrl || undefined,
         }),
       });
       const j = await readJson<SupportSendResponse>(r);
@@ -173,7 +218,7 @@ export default function SupportChatPanel() {
       }
 
       setDraft("");
-      setSendInfo("Sent");
+      clearPhoto();
       setPendingCount(Number(j.pendingCount ?? pendingCount));
       setMessages((prev) => [...prev, j.message as SupportMessage]);
       setThreads((prev) =>
@@ -199,21 +244,13 @@ export default function SupportChatPanel() {
 
   return (
     <div className="rounded-3xl border border-white/10 bg-white/5 p-6">
-      <div className="mb-4 flex items-center justify-between gap-3">
-        <div className="flex items-center gap-2">
-          <div className="text-xl font-semibold">Support Live Chat</div>
-          <span className="inline-flex min-w-6 items-center justify-center rounded-full bg-rose-500 px-2 py-0.5 text-xs font-semibold text-white">
-            {pendingCount}
-          </span>
-        </div>
-        <button
-          type="button"
-          onClick={() => void loadData(activeThreadId)}
-          className="rounded-xl border border-white/10 bg-white/5 px-4 py-2 text-sm hover:bg-white/10"
-        >
-          {loading ? "Refreshing..." : "Refresh"}
-        </button>
+      <div className="mb-4 flex items-center gap-2">
+        <div className="text-xl font-semibold">Openbookpro Client Support</div>
+        <span className="inline-flex min-w-6 items-center justify-center rounded-full bg-rose-500 px-2 py-0.5 text-xs font-semibold text-white">
+          {pendingCount}
+        </span>
       </div>
+      <div className="mb-4 text-xs text-white/50">Auto-sync every 3s</div>
 
       {listErr ? <div className="mb-3 text-sm text-red-300">{listErr}</div> : null}
 
@@ -271,33 +308,56 @@ export default function SupportChatPanel() {
                   <div className="text-sm text-white/60">{activeThread.email || "-"}</div>
                 </div>
                 <div className="text-right text-xs text-white/60">
-                  <div>Assigned: {activeThread.adminUsername || "-"}</div>
-                  <div className="mt-1">Status: {activeThread.status}</div>
+                  <div>Status: {activeThread.status}</div>
                 </div>
               </div>
 
               <div
                 ref={bodyRef}
-                className="max-h-[420px] space-y-2 overflow-auto rounded-xl border border-white/10 bg-[#0d0d0f] p-3"
+                className="max-h-[430px] space-y-3 overflow-auto rounded-xl border border-white/10 bg-[radial-gradient(circle_at_top,_rgba(59,130,246,0.08),_rgba(17,24,39,0.85)_40%,_rgba(10,10,14,1)_80%)] p-3"
               >
                 {messages.map((row) => {
                   const mine = row.senderRole === "ADMIN";
                   return (
-                    <div
-                      key={row.id}
-                      className={["flex", mine ? "justify-end" : "justify-start"].join(" ")}
-                    >
+                    <div key={row.id} className={["flex", mine ? "justify-end" : "justify-start"].join(" ")}>
                       <div
                         className={[
-                          "max-w-[90%] rounded-2xl px-3 py-2 text-sm",
+                          "relative max-w-[90%] rounded-2xl px-3 py-2 text-sm",
                           mine
-                            ? "bg-blue-600 text-white"
-                            : "border border-white/10 bg-white/[0.04] text-white/90",
+                            ? "bg-blue-600 text-white shadow-[0_8px_20px_rgba(37,99,235,0.35)]"
+                            : "border border-white/10 bg-[#1d1f25] text-white/90",
                         ].join(" ")}
                       >
-                        <div className="whitespace-pre-wrap break-words">{row.message}</div>
-                        <div className={["mt-1 text-[10px]", mine ? "text-blue-100/80" : "text-white/50"].join(" ")}>
-                          {fmtWhen(row.createdAt)}
+                        <span
+                          className={[
+                            "absolute top-3 h-3 w-3 rotate-45",
+                            mine
+                              ? "-right-1.5 bg-blue-600"
+                              : "-left-1.5 border-l border-t border-white/10 bg-[#1d1f25]",
+                          ].join(" ")}
+                          aria-hidden="true"
+                        />
+
+                        {row.messageType === "IMAGE" && row.imageUrl ? (
+                          <img
+                            src={row.imageUrl}
+                            alt="chat image"
+                            className="mb-2 max-h-72 w-auto max-w-full rounded-xl border border-white/20 object-contain"
+                          />
+                        ) : null}
+
+                        {row.message ? (
+                          <div className="whitespace-pre-wrap break-words">{row.message}</div>
+                        ) : null}
+
+                        <div
+                          className={[
+                            "mt-1 flex items-center justify-end gap-1 text-[10px]",
+                            mine ? "text-blue-100/80" : "text-white/50",
+                          ].join(" ")}
+                        >
+                          <span>{fmtWhen(row.createdAt)}</span>
+                          {mine ? <span>• Sent</span> : null}
                         </div>
                       </div>
                     </div>
@@ -310,6 +370,32 @@ export default function SupportChatPanel() {
                   </div>
                 ) : null}
               </div>
+
+              <input
+                ref={fileRef}
+                type="file"
+                accept="image/*"
+                className="hidden"
+                onChange={(e) => void onPhotoChanged(e.target.files?.[0])}
+              />
+
+              {pickedImageDataUrl ? (
+                <div className="mt-3 rounded-xl border border-white/10 bg-black/30 p-3">
+                  <div className="mb-2 text-xs text-white/60">{pickedImageName || "Selected photo"}</div>
+                  <img
+                    src={pickedImageDataUrl}
+                    alt="preview"
+                    className="max-h-40 rounded-lg border border-white/10 object-contain"
+                  />
+                  <button
+                    type="button"
+                    onClick={clearPhoto}
+                    className="mt-2 rounded-lg border border-white/10 bg-white/5 px-3 py-1 text-xs text-white/80"
+                  >
+                    Remove Photo
+                  </button>
+                </div>
+              ) : null}
 
               <div className="mt-3">
                 <textarea
@@ -326,11 +412,17 @@ export default function SupportChatPanel() {
                   className="w-full rounded-xl border border-white/10 bg-black/30 px-4 py-3 text-sm outline-none"
                 />
                 {sendErr ? <div className="mt-2 text-sm text-red-300">{sendErr}</div> : null}
-                {sendInfo ? <div className="mt-2 text-sm text-emerald-300">{sendInfo}</div> : null}
-                <div className="mt-2 flex justify-end">
+                <div className="mt-2 flex flex-wrap items-center justify-between gap-2">
                   <button
                     type="button"
-                    disabled={sendLoading || !draft.trim()}
+                    onClick={onPickPhoto}
+                    className="rounded-xl border border-white/10 bg-white/5 px-4 py-2 text-sm text-white/90 hover:bg-white/10"
+                  >
+                    + Photo
+                  </button>
+                  <button
+                    type="button"
+                    disabled={sendLoading || (!draft.trim() && !pickedImageDataUrl)}
                     onClick={() => void onSend()}
                     className="rounded-xl bg-blue-600 px-5 py-2.5 text-sm font-semibold text-white disabled:opacity-60"
                   >
